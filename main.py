@@ -37,74 +37,55 @@ def get_ai_advice(prompt):
         return f"AI Error: {e}"
 
 def run_coach():
-    send_telegram("🧐 V13: Ищу ЛЮБЫЕ данные мощности...")
-    
     try:
         auth = ('API_KEY', INTERVALS_API_KEY)
         today = datetime.date.today()
-        # Ищем далеко назад (60 дней), чтобы найти хоть что-то
+        # Данные за 60 дней
         start = (today - datetime.timedelta(days=60)).isoformat()
         end = today.isoformat()
         
         # 1. ЗАГРУЗКА
-        activities = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/activities?oldest={start}&newest={end}", auth=auth).json()
+        wellness = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/wellness?oldest={start}&newest={end}", auth=auth).json()
         curves = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/power-curves", auth=auth).json()
         events = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/events?oldest={end}&newest={end}", auth=auth).json()
-        wellness = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/wellness?oldest={start}&newest={end}", auth=auth).json()
 
-        # 2. ПОИСК ФИТНЕСА (CTL/TSB)
-        ctl, tsb = '?', '?'
-        last_date = '?'
+        # 2. ПОИСК ФИТНЕСА
+        ctl = 0.0
+        tsb_status = "Неизвестно"
         
-        # Ищем в Wellness (надежнее для TSB)
+        # Ищем последний известный CTL
         if isinstance(wellness, list):
             for day in reversed(wellness):
                 if day.get('ctl') is not None:
-                    ctl = day.get('ctl')
-                    tsb = day.get('tsb')
-                    last_date = day.get('id')
+                    ctl = float(day.get('ctl'))
                     break
         
-        # Если в Wellness пусто, пробуем Activities
-        if ctl == '?' and isinstance(activities, list) and len(activities) > 0:
-            last_act = sorted(activities, key=lambda x: x['start_date_local'])[-1]
-            ctl = last_act.get('icu_ctl') or last_act.get('ctl') or '?'
-            tsb = last_act.get('icu_tsb') or '?'
-            last_date = last_act['start_date_local'][:10]
+        # ЛОГИКА "ZERO TO HERO"
+        # Если CTL низкий, мы ПРИНУДИТЕЛЬНО считаем атлета свежим
+        if ctl < 10:
+            tsb_status = "Свеж (CTL низкий, начало сезона)"
+            override_rest = True
+        else:
+            tsb_status = "В рабочем режиме"
+            override_rest = False
 
-        # 3. ПОИСК МОЩНОСТИ (БЕЗ ФИЛЬТРОВ)
-        best_curve = []
+        # 3. ПОИСК МОЩНОСТИ
         max_power = 0
-        curve_name = "Нет"
-        available_curves = [] # Для отладки
-
+        has_power_data = False
+        
         if isinstance(curves, list):
             for c in curves:
-                c_id = c.get('id', 'NoID')
                 points = c.get('points', [])
-                available_curves.append(c_id)
-                
-                if not points: continue
-                
-                # Ищем максимальную мощность на 15 сек (Спринт), чтобы оценить крутизну кривой
-                p15 = next((p[1] for p in points if p[0] == 15), 0)
-                
-                # Берем ту кривую, где спринт мощнее (значит там есть реальные замеры)
-                if p15 > max_power:
-                    max_power = p15
-                    best_curve = points
-                    curve_name = c_id
-
-        # Собираем статистику
-        if best_curve:
-            def get_w(s):
-                p = min([p for p in best_curve], key=lambda x: abs(x[0]-s), default=None)
-                return p[1] if p else 0
-            
-            p15s, p1m, p5m, p20m = get_w(15), get_w(60), get_w(300), get_w(1200)
-            power_msg = f"МОЩНОСТЬ (Источник: {curve_name}):\n15s: {p15s}W\n1m: {p1m}W\n5m: {p5m}W\n20m: {p20m}W"
-        else:
-            power_msg = f"МОЩНОСТЬ НЕ НАЙДЕНА.\nЯ видел такие кривые: {', '.join(available_curves)}.\nВсе они пустые."
+                if points:
+                    # Проверяем, есть ли там хоть что-то выше 100 ватт (защита от глюков)
+                    p_max = next((p[1] for p in points if p[0] == 15), 0)
+                    if p_max > 50:
+                        has_power_data = True
+                        break
+        
+        power_instruction = ""
+        if not has_power_data:
+            power_instruction = "ВАЖНО: Данных мощности НЕТ. Твоя главная задача — заставить атлета сделать тренировку, чтобы собрать данные!"
 
         # План
         plan_txt = "Отдых"
@@ -114,26 +95,25 @@ def run_coach():
 
         # 4. AI
         prompt = f"""
-        Ты велотренер.
+        Ты жесткий, но справедливый велотренер.
         
-        ДАННЫЕ АТЛЕТА (актуальны на {last_date}):
-        - CTL (Фитнес): {ctl} (Если <10 - начальный уровень/возврат)
-        - TSB (Форма): {tsb}
+        ДАННЫЕ АТЛЕТА:
+        - Фитнес (CTL): {ctl} (Это очень низкий уровень, начало с нуля).
+        - Статус: {tsb_status}.
+        - {power_instruction}
         
-        {power_msg}
+        ПЛАН В КАЛЕНДАРЕ: {plan_txt}
         
-        ПЛАН СЕГОДНЯ: {plan_txt}
+        ТВОЯ ЗАДАЧА (ПРИОРИТЕТ ВЫСОКИЙ):
+        1. Если CTL < 5, ЗАПРЕТИ ОТДЫХАТЬ. Скажи: "Какой отдых? Мы еще не начали!".
+        2. Если данных мощности нет, дай задание: "Сделай 45-60 минут в зоне 2 (разговорный темп) или заедь в Zwift, чтобы мы получили первые цифры".
+        3. Будь краток и мотивируй начать прямо сейчас.
         
-        ЗАДАЧА:
-        1. Оцени форму. Если CTL очень низкий (как сейчас), скажи, что мы строим базу с нуля.
-        2. Если TSB позволяет -> Предложи тренировку (Sweet Spot или Base), игнорируя отдых.
-        3. Проанализируй мощность (если есть цифры). Скажи, сильный ли спринт или база.
-        
-        Отвечай текстом.
+        Никаких советов про еду. Только крутить педали.
         """
         
         advice = get_ai_advice(prompt)
-        send_telegram(f"🚴 COACH V13 🚴\n\n{advice}")
+        send_telegram(f"🚀 ТРЕНЕР V14 (РЕЖИМ СТАРТА):\n\n{advice}")
 
     except Exception as e:
         send_telegram(f"Error: {traceback.format_exc()[-300:]}")
