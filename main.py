@@ -2,16 +2,20 @@ import requests
 import datetime
 import os
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import io
+import math
 
-# Получаем ключи
+# --- КЛЮЧИ ---
 INTERVALS_ID = os.environ["INTERVALS_ID"]
 INTERVALS_API_KEY = os.environ["INTERVALS_KEY"]
 GOOGLE_API_KEY = os.environ["GOOGLE_KEY"]
 TG_TOKEN = os.environ["TG_TOKEN"]
 TG_CHAT_ID = os.environ["TG_CHAT_ID"]
 
-# --- ФУНКЦИИ ОТПРАВКИ ---
+# --- НАСТРОЙКИ ГРАФИКОВ ---
+plt.style.use('bmh') # Стиль, похожий на Intervals
+
 def send_telegram_photo(caption, photo_file):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
     data = {"chat_id": TG_CHAT_ID, "caption": caption, "parse_mode": "Markdown"}
@@ -23,60 +27,92 @@ def send_telegram_text(text):
     data = {"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "Markdown"}
     requests.post(url, json=data)
 
-# --- РИСОВАНИЕ ГРАФИКОВ ---
-def create_wellness_chart(w):
-    # Данные для графика
-    labels = ['HRV', 'Сон', 'Энергия', 'Настроение']
-    
-    # Нормализуем данные для красоты (примерно)
-    # HRV: берем текущее / 50 (условная норма) * 100
-    hrv_val = w.get('hrv', 0) or 0
-    hrv_score = min((hrv_val / 60) * 100, 100) # 60ms как база
-    
-    # Сон: часы / 8 * 100
-    sleep_val = (w.get('sleepSecs', 0) or 0) / 3600
-    sleep_score = min((sleep_val / 8) * 100, 100)
-    
-    # Энергия и настроение (1-4) -> в %
-    energy_score = (w.get('energy', 0) or 0) * 25
-    mood_score = (w.get('mood', 0) or 0) * 25
+# --- ГЕНЕРАЦИЯ СЛОЖНЫХ ГРАФИКОВ ---
+def create_pro_charts(history_data, power_curve_data):
+    # Создаем картинку с 2 графиками
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+    plt.subplots_adjust(hspace=0.3)
 
-    values = [hrv_score, sleep_score, energy_score, mood_score]
-    colors = ['#4CAF50' if v > 70 else '#FFC107' if v > 40 else '#F44336' for v in values]
+    # === ГРАФИК 1: ФИТНЕС / УСТАЛОСТЬ (42 дня) ===
+    dates = []
+    ctl = [] # Fitness (Blue)
+    atl = [] # Fatigue (Purple)
+    tsb = [] # Form (Grey/Orange)
 
-    # Рисуем
-    plt.figure(figsize=(6, 4))
-    bars = plt.bar(labels, values, color=colors)
-    plt.title(f"Заряд батарейки: {datetime.date.today()}", fontsize=14)
-    plt.ylim(0, 110)
-    plt.grid(axis='y', linestyle='--', alpha=0.5)
+    for day in history_data:
+        d = datetime.date.fromisoformat(day['id'])
+        dates.append(d)
+        ctl.append(day.get('ctl', 0))
+        atl.append(day.get('atl', 0))
+        tsb.append(day.get('tsb', 0))
+
+    # Рисуем линии как на Intervals.icu
+    ax1.plot(dates, ctl, color='#03A9F4', linewidth=2, label='Fitness (CTL)') # Голубой
+    ax1.plot(dates, atl, color='#9C27B0', linewidth=1, label='Fatigue (ATL)', alpha=0.7) # Фиолетовый
     
-    # Добавляем цифры над столбиками
-    real_values = [f"{int(hrv_val)}ms", f"{sleep_val:.1f}ч", f"{w.get('energy','-')}/4", f"{w.get('mood','-')}/4"]
-    for bar, text in zip(bars, real_values):
-        plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 2, text, 
-                 ha='center', va='bottom', fontsize=10, fontweight='bold')
+    # Закрашиваем зоны TSB
+    ax1.fill_between(dates, tsb, 0, where=[t >= 0 for t in tsb], color='#4CAF50', alpha=0.3, label='Fresh (+)')
+    ax1.fill_between(dates, tsb, 0, where=[t < 0 for t in tsb], color='#FF9800', alpha=0.3, label='Tired (-)')
+    
+    # Добавляем серую линию TSB
+    ax1.plot(dates, tsb, color='gray', linewidth=1, linestyle='--')
 
-    # Сохраняем в память (буфер)
+    ax1.set_title("Динамика формы (42 дня)", fontsize=12, fontweight='bold')
+    ax1.grid(True, linestyle='--', alpha=0.5)
+    ax1.legend(loc='upper left', fontsize=8)
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%d.%m'))
+
+    # === ГРАФИК 2: КРИВАЯ МОЩНОСТИ (Power Curve) ===
+    # Данные приходят в формате [[secs, watts], [secs, watts]...]
+    points = power_curve_data.get('points', [])
+    
+    if points:
+        secs = [p[0] for p in points if p[0] <= 7200] # Берем до 2 часов (7200 сек)
+        watts = [p[1] for p in points if p[0] <= 7200]
+        
+        # Логарифмическая шкала для оси X (как в Intervals)
+        ax2.set_xscale('log')
+        ax2.plot(secs, watts, color='#E91E63', linewidth=2) # Розовая линия
+        
+        ax2.set_title("Кривая мощности (Сезон)", fontsize=12, fontweight='bold')
+        ax2.set_ylabel("Ватты (W)")
+        ax2.grid(True, which="both", ls="-", alpha=0.2)
+
+        # Подписываем ключевые точки (15s, 1m, 5m, 20m)
+        key_durations = {15: "15s", 60: "1m", 300: "5m", 1200: "20m"}
+        
+        for dur, label in key_durations.items():
+            # Ищем ближайшее значение в данных
+            closest_p = min(points, key=lambda x: abs(x[0] - dur))
+            w = closest_p[1]
+            # Ставим точку и текст
+            ax2.scatter(dur, w, color='black', zorder=5)
+            ax2.annotate(f"{label}\n{w}W", (dur, w), xytext=(0, 10), textcoords='offset points', ha='center', fontweight='bold')
+            
+        # Настройка подписей оси X (чтобы было красиво)
+        ax2.set_xticks([15, 60, 300, 1200, 3600])
+        ax2.set_xticklabels(["15s", "1m", "5m", "20m", "1h"])
+    else:
+        ax2.text(0.5, 0.5, "Нет данных Power Curve", ha='center')
+
+    # Сохраняем
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight')
+    plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
     buf.seek(0)
     plt.close()
     return buf
 
 # --- ИИ ---
 def get_ai_advice(prompt):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GOOGLE_API_KEY}"
     try:
-        # Ищем модель
-        models = requests.get(url).json()
-        model_name = "models/gemini-1.5-flash" # По умолчанию
-        for m in models.get('models', []):
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GOOGLE_API_KEY}"
+        data = requests.get(url).json()
+        model_name = "models/gemini-1.5-flash"
+        for m in data.get('models', []):
             if 'generateContent' in m.get('supportedGenerationMethods', []):
                 model_name = m['name']
                 break
         
-        # Запрос
         api_url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={GOOGLE_API_KEY}"
         resp = requests.post(api_url, json={"contents": [{"parts": [{"text": prompt}]}]})
         return resp.json()['candidates'][0]['content']['parts'][0]['text']
@@ -85,53 +121,92 @@ def get_ai_advice(prompt):
 
 # --- ГЛАВНАЯ ЛОГИКА ---
 def run_coach():
-    now_hour = datetime.datetime.now().hour
-    is_morning = now_hour < 12
-    today = datetime.date.today().isoformat()
+    today = datetime.date.today()
     auth = ('API_KEY', INTERVALS_API_KEY)
     
+    # 1. Данные для Fitness графика (последние 42 дня)
+    start_date = (today - datetime.timedelta(days=42)).isoformat()
+    end_date = today.isoformat()
+    
     try:
-        w = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/wellness/{today}", auth=auth).json()
-        events = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/events?oldest={today}&newest={today}", auth=auth).json()
+        print("Загружаю историю wellness...")
+        history = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/wellness?oldest={start_date}&newest={end_date}", auth=auth).json()
+        
+        print("Загружаю Power Curve...")
+        # Запрашиваем кривые
+        curves_resp = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/power-curves", auth=auth).json()
+        # Ищем кривую текущего сезона (или последнюю доступную)
+        season_curve = {}
+        for c in curves_resp:
+            # Обычно первая кривая самая актуальная, или ищем по id
+            season_curve = c
+            break
+            
+        # План на сегодня
+        events = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/events?oldest={end_date}&newest={end_date}", auth=auth).json()
+        
     except Exception as e:
-        send_telegram_text(f"❌ Ошибка данных: {e}")
+        send_telegram_text(f"❌ Ошибка получения данных: {e}")
         return
 
-    # Формируем план текстом
+    # Извлекаем ключевые цифры мощности для ИИ
+    power_stats = "Нет данных мощности."
+    points = season_curve.get('points', [])
+    if points:
+        # Функция поиска ватт по секундам
+        def get_watts(s):
+            val = min(points, key=lambda x: abs(x[0] - s))
+            return val[1]
+        
+        p_15s = get_watts(15)
+        p_1m = get_watts(60)
+        p_5m = get_watts(300)
+        p_20m = get_watts(1200)
+        p_eftp = history[-1].get('eftp', 'н/д')
+        
+        power_stats = f"Спринт (15с): {p_15s}W\n1 мин: {p_1m}W\nVo2Max (5 мин): {p_5m}W\nFTP (20 мин): {p_20m}W\nТекущий eFTP: {p_eftp}W"
+
+    # Текст плана
     plan_text = ""
     for item in events:
         if item.get('type') in ['Ride', 'Run', 'Swim', 'Workout']:
             plan_text += f"- {item.get('name')}\n"
-            
+    if not plan_text: plan_text = "Отдых"
+
+    # Время суток
+    is_morning = datetime.datetime.now().hour < 12
+
     if is_morning:
-        # 1. Генерируем картинку
-        photo = create_wellness_chart(w)
+        # Генерируем картинку
+        photo = create_pro_charts(history, season_curve)
         
-        # 2. Генерируем совет
+        # Данные последнего дня
+        last = history[-1]
+        
         prompt = f"""
-        Ты тренер. Утро ({today}).
-        Атлет: HRV {w.get('hrv',0)}, Сон {w.get('sleepSecs',0)/3600:.1f}ч.
-        План: {plan_text}.
-        Дай короткий, жесткий или хвалебный совет (2 предложения).
+        Ты аналитик велоспорта.
+        
+        ДАННЫЕ АТЛЕТА:
+        1. Фитнес (CTL): {last.get('ctl')}
+        2. Форма (TSB): {last.get('tsb')} (Если минус — устал, если плюс — свеж)
+        
+        МОЩНОСТЬ (Сезон):
+        {power_stats}
+        
+        ПЛАН НА СЕГОДНЯ:
+        {plan_text}
+        
+        ЗАДАЧА:
+        Проанализируй цифры. 
+        1. Оцени профиль мощности (спринтер, темповик или горняк?).
+        2. Дай совет по сегодняшней тренировке с учетом TSB и eFTP.
         """
+        
         advice = get_ai_advice(prompt)
-        
-        # 3. Отправляем ФОТО + Текст
-        send_telegram_photo(f"📊 *Утренний статус*\n\n{advice}", photo)
-        
+        send_telegram_photo(f"🚴‍♂️ *Pro Аналитика*\n\n{advice}", photo)
+    
     else:
-        # Вечером пока только текст (можно добавить график выполненной работы позже)
-        activities = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/activities?oldest={today}&newest={today}", auth=auth).json()
-        done_text = ""
-        for act in activities:
-            done_text += f"- {act.get('name')} (Load: {act.get('icu_training_load',0)})\n"
-            
-        prompt = f"""
-        Вечер 22:00. План был: {plan_text}. Сделано: {done_text}.
-        Подведи итог дня.
-        """
-        advice = get_ai_advice(prompt)
-        send_telegram_text(f"🌙 *Итоги дня*\n\n{advice}")
+        send_telegram_text("🌙 День окончен. Данные обновлены.")
 
 if __name__ == "__main__":
     run_coach()
