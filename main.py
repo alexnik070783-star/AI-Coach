@@ -18,12 +18,11 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_KEY")
 TG_TOKEN = os.environ.get("TG_TOKEN")
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID")
 
-# --- ОТПРАВКА (БЕЗ MARKDOWN - ЧТОБЫ НАВЕРНЯКА) ---
+# --- ОТПРАВКА (БЕЗ MARKDOWN) ---
 def send_telegram_text(text):
     if not TG_TOKEN or not TG_CHAT_ID: return
     try:
         url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-        # Убрали parse_mode, теперь шлем чистый текст
         data = {"chat_id": TG_CHAT_ID, "text": text}
         requests.post(url, json=data)
     except Exception as e:
@@ -33,17 +32,15 @@ def send_telegram_photo(caption, photo_file):
     if not TG_TOKEN or not TG_CHAT_ID: return
     try:
         url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
-        data = {"chat_id": TG_CHAT_ID, "caption": caption} # Тоже без Markdown
+        data = {"chat_id": TG_CHAT_ID, "caption": caption}
         photo_file.seek(0)
         files = {"photo": ('chart.png', photo_file, 'image/png')}
         resp = requests.post(url, data=data, files=files)
         
         if resp.status_code != 200:
-            send_telegram_text(f"⚠️ График не прошел (Код {resp.status_code}):\n{resp.text}")
-            # Если фото не прошло, шлем просто текст совета
-            send_telegram_text(caption)
+            send_telegram_text(f"⚠️ График не прошел (Код {resp.status_code}). Совет тренера:\n\n{caption}")
     except Exception as e:
-        send_telegram_text(f"⚠️ Ошибка фото кода: {e}")
+        send_telegram_text(f"⚠️ Ошибка фото: {e}")
         send_telegram_text(caption)
 
 # --- ГРАФИКИ ---
@@ -74,7 +71,6 @@ def create_charts(history_data, power_curve_data):
     # Вес (справа)
     if any(w is not None for w in weight):
         ax1r = ax1.twinx()
-        # Фильтр None
         valid_w = [(d, w) for d, w in zip(dates, weight) if w is not None]
         if valid_w:
             wd, ww = zip(*valid_w)
@@ -96,45 +92,8 @@ def create_charts(history_data, power_curve_data):
             ax2.plot(secs, watts, color='purple', linewidth=2)
             ax2.set_title("Power Curve")
             
-            # Метки
             targets = {15: "15s", 60: "1m", 300: "5m", 1200: "20m"}
             for d, l in targets.items():
                 closest = min(valid, key=lambda x: abs(x[0]-d))
                 ax2.annotate(f"{l}\n{closest[1]}W", (closest[0], closest[1]), 
-                             xytext=(0,10), textcoords='offset points', ha='center')
-
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight')
-    buf.seek(0)
-    return buf
-
-# --- AI ---
-def get_ai_advice(prompt):
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GOOGLE_API_KEY}"
-        data = requests.get(url).json()
-        model = "models/gemini-1.5-flash"
-        if 'models' in data:
-            for m in data['models']:
-                if 'generateContent' in m.get('supportedGenerationMethods', []):
-                    model = m['name']; break
-        
-        api = f"https://generativelanguage.googleapis.com/v1beta/{model}:generateContent?key={GOOGLE_API_KEY}"
-        res = requests.post(api, json={"contents": [{"parts": [{"text": prompt}]}]})
-        return res.json()['candidates'][0]['content']['parts'][0]['text']
-    except Exception as e:
-        return f"AI Error: {e}"
-
-# --- MAIN ---
-def run_coach():
-    # Шлем сигнал, что мы живы
-    send_telegram_text("🏁 Бот проснулся. Собираю данные...")
-    
-    try:
-        auth = ('API_KEY', INTERVALS_API_KEY)
-        today = datetime.date.today()
-        start = (today - datetime.timedelta(days=42)).isoformat()
-        end = today.isoformat()
-        
-        # 1. Загрузка
-        hist = requests.get(f
+                             xytext=(0,
