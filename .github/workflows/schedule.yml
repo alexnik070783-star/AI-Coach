@@ -1,0 +1,33 @@
+name: AI Coach Daily
+
+on:
+  schedule:
+    # 07:00 утра по Минску (это 04:00 UTC)
+    - cron: '0 4 * * *'
+    # 22:00 вечера по Минску (это 19:00 UTC)
+    - cron: '0 19 * * *'
+  workflow_dispatch: # Кнопка для ручного запуска
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+        
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+          
+      - name: Install dependencies
+        run: pip install requests
+        
+      - name: Run Coach
+        env:
+          INTERVALS_ID: ${{ secrets.INTERVALS_ID }}
+          INTERVALS_KEY: ${{ secrets.INTERVALS_KEY }}
+          GOOGLE_KEY: ${{ secrets.GOOGLE_KEY }}
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: python main.py
