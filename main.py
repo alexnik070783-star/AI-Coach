@@ -37,79 +37,74 @@ def get_ai_advice(prompt):
         return f"AI Error: {e}"
 
 def run_coach():
-    send_telegram("🕵️‍♂️ V12: Сканирую тренировки и кривые...")
+    send_telegram("🧐 V13: Ищу ЛЮБЫЕ данные мощности...")
     
     try:
         auth = ('API_KEY', INTERVALS_API_KEY)
         today = datetime.date.today()
-        # Берем данные за 30 дней
-        start = (today - datetime.timedelta(days=30)).isoformat()
+        # Ищем далеко назад (60 дней), чтобы найти хоть что-то
+        start = (today - datetime.timedelta(days=60)).isoformat()
         end = today.isoformat()
         
         # 1. ЗАГРУЗКА
-        # Тренировки (Activities) - самый надежный источник TSB
         activities = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/activities?oldest={start}&newest={end}", auth=auth).json()
-        # Здоровье (для сна)
-        wellness = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/wellness?oldest={start}&newest={end}", auth=auth).json()
-        # Кривые мощности
         curves = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/power-curves", auth=auth).json()
-        # План
         events = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/events?oldest={end}&newest={end}", auth=auth).json()
+        wellness = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/wellness?oldest={start}&newest={end}", auth=auth).json()
 
-        # 2. ПОИСК ФИТНЕСА (TSB/CTL)
-        # Сначала ищем в последней активности (самый точный метод)
-        last_ride_stats = "Данных нет"
+        # 2. ПОИСК ФИТНЕСА (CTL/TSB)
         ctl, tsb = '?', '?'
+        last_date = '?'
         
-        if isinstance(activities, list) and len(activities) > 0:
-            # Сортируем и берем последнюю
-            last_act = activities[0] # API обычно отдает новые первыми, но проверим
-            # На всякий случай найдем самую свежую по дате
+        # Ищем в Wellness (надежнее для TSB)
+        if isinstance(wellness, list):
+            for day in reversed(wellness):
+                if day.get('ctl') is not None:
+                    ctl = day.get('ctl')
+                    tsb = day.get('tsb')
+                    last_date = day.get('id')
+                    break
+        
+        # Если в Wellness пусто, пробуем Activities
+        if ctl == '?' and isinstance(activities, list) and len(activities) > 0:
             last_act = sorted(activities, key=lambda x: x['start_date_local'])[-1]
-            
             ctl = last_act.get('icu_ctl') or last_act.get('ctl') or '?'
             tsb = last_act.get('icu_tsb') or '?'
-            last_ride_stats = f"Данные из тренировки от {last_act['start_date_local'][:10]}"
+            last_date = last_act['start_date_local'][:10]
 
-        # Если в активностях пусто, пробуем Wellness
-        if tsb == '?' and isinstance(wellness, list):
-            for day in reversed(wellness):
-                if day.get('tsb') is not None:
-                    tsb = day.get('tsb')
-                    ctl = day.get('ctl')
-                    last_ride_stats = f"Данные из Wellness от {day['id']}"
-                    break
-
-        # 3. ПОИСК МОЩНОСТИ (ПЕРЕБОР ВСЕГО)
-        # Мы просто берем кривую с самыми большими цифрами (она скорее всего и есть нужная)
+        # 3. ПОИСК МОЩНОСТИ (БЕЗ ФИЛЬТРОВ)
         best_curve = []
-        max_watts_found = 0
+        max_power = 0
         curve_name = "Нет"
+        available_curves = [] # Для отладки
 
         if isinstance(curves, list):
             for c in curves:
+                c_id = c.get('id', 'NoID')
                 points = c.get('points', [])
+                available_curves.append(c_id)
+                
                 if not points: continue
                 
-                # Ищем 20-минутный пик, чтобы понять, реальная это кривая или мусор
-                p20 = next((p[1] for p in points if p[0] == 1200), 0)
+                # Ищем максимальную мощность на 15 сек (Спринт), чтобы оценить крутизну кривой
+                p15 = next((p[1] for p in points if p[0] == 15), 0)
                 
-                # Если эта кривая мощнее предыдущей найденной - берем её
-                if p20 > max_watts_found:
-                    max_watts_found = p20
+                # Берем ту кривую, где спринт мощнее (значит там есть реальные замеры)
+                if p15 > max_power:
+                    max_power = p15
                     best_curve = points
-                    curve_name = c.get('id', 'Unknown')
+                    curve_name = c_id
 
-        # Формируем отчет по мощности
-        power_msg = f"Профиль мощности: Не найден (ID кривых: {[c.get('id') for c in curves] if isinstance(curves, list) else 'Error'})"
-        
+        # Собираем статистику
         if best_curve:
             def get_w(s):
                 p = min([p for p in best_curve], key=lambda x: abs(x[0]-s), default=None)
                 return p[1] if p else 0
             
             p15s, p1m, p5m, p20m = get_w(15), get_w(60), get_w(300), get_w(1200)
-            power_msg = f"МОЩНОСТЬ (источник: {curve_name}):\nSprint(15s): {p15s}W\n1 min: {p1m}W\nVO2(5m): {p5m}W\nFTP(20m): {p20m}W"
+            power_msg = f"МОЩНОСТЬ (Источник: {curve_name}):\n15s: {p15s}W\n1m: {p1m}W\n5m: {p5m}W\n20m: {p20m}W"
+        else:
+            power_msg = f"МОЩНОСТЬ НЕ НАЙДЕНА.\nЯ видел такие кривые: {', '.join(available_curves)}.\nВсе они пустые."
 
         # План
         plan_txt = "Отдых"
@@ -117,29 +112,28 @@ def run_coach():
             plans = [e['name'] for e in events if e.get('type') in ['Ride','Run','Swim','Workout']]
             if plans: plan_txt = ", ".join(plans)
 
-        # 4. AI ЗАДАЧА
+        # 4. AI
         prompt = f"""
         Ты велотренер.
         
-        ИСТОЧНИК ДАННЫХ: {last_ride_stats}
-        - Фитнес (CTL): {ctl}
-        - Форма (TSB): {tsb} (Плюс = свеж, Минус = устал)
+        ДАННЫЕ АТЛЕТА (актуальны на {last_date}):
+        - CTL (Фитнес): {ctl} (Если <10 - начальный уровень/возврат)
+        - TSB (Форма): {tsb}
         
         {power_msg}
         
         ПЛАН СЕГОДНЯ: {plan_txt}
         
-        ТВОЯ ЗАДАЧА:
-        1. Проанализируй TSB.
-        2. Если TSB > 0 (или близко к нулю) -> ПРЕДЛОЖИ ТРЕНИРОВКУ! Скажи: "Ты свеж, план 'Отдых' отменяем. Давай поработаем". Предложи тему (Sweet Spot или VO2).
-        3. Если TSB < -10 -> Подтверди отдых.
-        4. Если есть цифры мощности, скажи, какой это тип гонщика (Спринтер? Темповик?).
+        ЗАДАЧА:
+        1. Оцени форму. Если CTL очень низкий (как сейчас), скажи, что мы строим базу с нуля.
+        2. Если TSB позволяет -> Предложи тренировку (Sweet Spot или Base), игнорируя отдых.
+        3. Проанализируй мощность (если есть цифры). Скажи, сильный ли спринт или база.
         
-        Отвечай текстом без форматирования.
+        Отвечай текстом.
         """
         
         advice = get_ai_advice(prompt)
-        send_telegram(f"🚴 COACH V12 🚴\n\n{advice}")
+        send_telegram(f"🚴 COACH V13 🚴\n\n{advice}")
 
     except Exception as e:
         send_telegram(f"Error: {traceback.format_exc()[-300:]}")
