@@ -3,16 +3,25 @@ import datetime
 import os
 import traceback
 
-# --- КЛЮЧИ И КООРДИНАТЫ ---
+# --- КЛЮЧИ ---
 INTERVALS_ID = os.environ.get("INTERVALS_ID")
 INTERVALS_API_KEY = os.environ.get("INTERVALS_KEY")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_KEY")
 TG_TOKEN = os.environ.get("TG_TOKEN")
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID")
-# Координаты (если нет в секретах, поставь свои цифры здесь вместо os.environ...)
-USER_LAT = os.environ.get("USER_LAT") 
-USER_LON = os.environ.get("USER_LON")
 
+# --- 🌍 ТВОИ КООРДИНАТЫ (Впиши их здесь!) ---
+# Замени цифры в кавычках на свои. Точка обязательна (не запятая!).
+USER_LAT = "53°13'49.8"N"  # <-- СЮДА ВПИШИ ПЕРВУЮ ЦИФРУ (Широта)
+USER_LON = "26°40'03.8"E"   # <-- СЮДА ВПИШИ ВТОРУЮ ЦИФРУ (Долгота)
+
+# (Этот блок оставим на случай, если ты все-таки настроишь YAML, но пока берем цифры выше)
+ENV_LAT = os.environ.get("USER_LAT")
+ENV_LON = os.environ.get("USER_LON")
+if ENV_LAT and ENV_LON:
+    USER_LAT, USER_LON = ENV_LAT, ENV_LON
+
+# --- ФУНКЦИИ ОТПРАВКИ ---
 def send_telegram(text):
     if not TG_TOKEN or not TG_CHAT_ID: return
     try:
@@ -38,35 +47,31 @@ def get_ai_advice(prompt):
     except Exception as e:
         return f"AI Error: {e}"
 
-# --- ПОГОДНЫЙ БЛОК ---
+# --- ПОГОДА ---
 def get_weather():
-    if not USER_LAT or not USER_LON:
-        return "Нет координат (добавь USER_LAT/USER_LON в Secrets)"
-    
     try:
-        # Open-Meteo API (Бесплатно, без ключа)
+        # API Open-Meteo
         url = f"https://api.open-meteo.com/v1/forecast?latitude={USER_LAT}&longitude={USER_LON}&current_weather=true&windspeed_unit=kmh"
         res = requests.get(url).json()
         
         if 'current_weather' not in res:
-            return "Ошибка погоды"
+            return f"Не удалось получить погоду (проверь координаты: {USER_LAT}, {USER_LON})"
             
         cur = res['current_weather']
         temp = cur.get('temperature')
-        wind_speed = cur.get('windspeed')
-        wind_dir = cur.get('winddirection') # Градусы
+        wind_s = cur.get('windspeed')
+        wind_d = cur.get('winddirection')
         
-        # Перевод градусов в направление
-        directions = ["С (Север)", "СВ (Северо-Восток)", "В (Восток)", "ЮВ (Юго-Восток)", 
-                      "Ю (Юг)", "ЮЗ (Юго-Запад)", "З (Запад)", "СЗ (Северо-Запад)"]
-        # Формула: (градусы + 22.5) / 45
-        idx = int((wind_dir + 22.5) % 360 / 45)
-        dir_text = directions[idx]
+        # Компас
+        dirs = ["С (Север)", "СВ", "В (Восток)", "ЮВ", "Ю (Юг)", "ЮЗ", "З (Запад)", "СЗ"]
+        idx = int((wind_d + 22.5) % 360 / 45)
+        dir_text = dirs[idx]
         
-        return f"🌡 {temp}°C, 💨 Ветер: {wind_speed} км/ч ({dir_text})"
+        return f"🌡 {temp}°C, 💨 Ветер: {wind_s} км/ч, Направление: {dir_text} ({wind_d}°)"
     except Exception as e:
-        return f"Сбой погоды: {e}"
+        return f"Ошибка погоды: {e}"
 
+# --- ГЛАВНЫЙ ЗАПУСК ---
 def run_coach():
     try:
         auth = ('API_KEY', INTERVALS_API_KEY)
@@ -74,10 +79,10 @@ def run_coach():
         start = (today - datetime.timedelta(days=60)).isoformat()
         end = today.isoformat()
         
-        # 1. СБОР ДАННЫХ
+        # 1. ЗАГРУЗКА
         wellness = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/wellness?oldest={start}&newest={end}", auth=auth).json()
         events = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/events?oldest={end}&newest={end}", auth=auth).json()
-        weather_msg = get_weather()
+        weather_msg = get_weather() # <-- Теперь точно сработает!
 
         # 2. ФИТНЕС
         ctl = 0.0
@@ -86,36 +91,38 @@ def run_coach():
                 if day.get('ctl') is not None:
                     ctl = float(day.get('ctl'))
                     break
-        
+
         # 3. ПЛАН
         plan_txt = "Отдых"
         if isinstance(events, list):
             plans = [e['name'] for e in events if e.get('type') in ['Ride','Run','Swim','Workout']]
             if plans: plan_txt = ", ".join(plans)
 
-        # 4. AI ЗАДАЧА
+        # 4. AI
         prompt = f"""
-        Ты велотренер-стратег.
+        Ты велотренер и метеоролог.
         
-        ДАННЫЕ:
-        - Фитнес (CTL): {ctl} (Базовый уровень).
+        ДАННЫЕ АТЛЕТА:
+        - Фитнес (CTL): {ctl} (Уровень: Начало базы).
         - План: {plan_txt}.
-        - ПОГОДА ЗА ОКНОМ: {weather_msg}.
+        - ПОГОДА (Локальная): {weather_msg}.
         
         ТВОЯ ЗАДАЧА:
-        1. Если погода хорошая для улицы (ветер < 25 км/ч, тепло) -> Предложи маршрут.
-           ВАЖНО: Посоветуй, куда ехать сначала, чтобы бороться с ветром на свежих ногах.
-           (Пример: "Ветер Северный, значит выезжай на Север, чтобы вернуться по ветру").
+        1. Проанализируй ветер. 
+           - Если ветер > 25 км/ч: Предложи маршрут! "Выезжай СНАЧАЛА ПРОТИВ ВЕТРА (на [Сторона Света]), чтобы возвращаться легко".
+           - Если ветер слабый: "Ветра почти нет, езжай куда хочешь".
+        2. Дай рекомендацию "Улица vs Дом":
+           - Холодно/Дождь/Шторм -> Zwift.
+           - Норм -> Улица (даже если план Отдых, для базы полезно покрутить ногами).
            
-        2. Если погода "нелетная" (сильный ветер > 30 км/ч, холод) -> Рекомендуй Zwift/Бег.
-        
-        3. Если CTL низкий, но погода супер -> Мотивируй выйти на улицу, это лучшее время для базы.
-        
-        Будь краток. Формат: "🌤 ПОГОДА / 🚴 ТРЕНИРОВКА / 🧭 СТРАТЕГИЯ ВЕТРА".
+        Формат ответа:
+        🌤 ПОГОДА: ...
+        🧭 СТРАТЕГИЯ: ...
+        🚴 ЗАДАНИЕ: ...
         """
         
         advice = get_ai_advice(prompt)
-        send_telegram(f"🌪 AERO COACH V16:\n\n{advice}")
+        send_telegram(f"🌪 AERO COACH V16.1:\n\n{advice}")
 
     except Exception as e:
         send_telegram(f"Error: {traceback.format_exc()[-300:]}")
