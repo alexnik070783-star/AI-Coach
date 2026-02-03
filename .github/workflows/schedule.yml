@@ -2,10 +2,11 @@ name: AI Coach Daily
 
 on:
   schedule:
-    # 07:00 утра по Минску (это 04:00 UTC)
-    - cron: '0 4 * * *'
-    # 22:00 вечера по Минску (это 19:00 UTC)
-    - cron: '0 19 * * *'
+    # Время в UTC. Нидерланды зимой = UTC+1.
+    # 6:00 UTC = 7:00 утра NL
+    - cron: '0 6 * * *'
+    # 21:00 UTC = 22:00 вечера NL
+    - cron: '0 21 * * *'
   workflow_dispatch: # Кнопка для ручного запуска
 
 jobs:
@@ -21,8 +22,9 @@ jobs:
           python-version: '3.9'
           
       - name: Install dependencies
-       run: pip install requests matplotlib
-       
+        # ЗДЕСЬ МЫ ДОБАВИЛИ matplotlib ДЛЯ ГРАФИКОВ
+        run: pip install requests matplotlib
+        
       - name: Run Coach
         env:
           INTERVALS_ID: ${{ secrets.INTERVALS_ID }}
