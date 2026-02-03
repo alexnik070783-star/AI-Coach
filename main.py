@@ -96,4 +96,90 @@ def create_charts(history_data, power_curve_data):
             for d, l in targets.items():
                 closest = min(valid, key=lambda x: abs(x[0]-d))
                 ax2.annotate(f"{l}\n{closest[1]}W", (closest[0], closest[1]), 
-                             xytext=(0,
+                             xytext=(0,10), textcoords='offset points', ha='center')
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight')
+    buf.seek(0)
+    plt.close()
+    return buf
+
+# --- AI ---
+def get_ai_advice(prompt):
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GOOGLE_API_KEY}"
+        data = requests.get(url).json()
+        model = "models/gemini-1.5-flash"
+        if 'models' in data:
+            for m in data['models']:
+                if 'generateContent' in m.get('supportedGenerationMethods', []):
+                    model = m['name']; break
+        
+        api = f"https://generativelanguage.googleapis.com/v1beta/{model}:generateContent?key={GOOGLE_API_KEY}"
+        res = requests.post(api, json={"contents": [{"parts": [{"text": prompt}]}]})
+        return res.json()['candidates'][0]['content']['parts'][0]['text']
+    except Exception as e:
+        return f"AI Error: {e}"
+
+# --- MAIN ---
+def run_coach():
+    # Сигнал жизни
+    send_telegram_text("🏁 Бот проснулся. Собираю данные...")
+    
+    try:
+        auth = ('API_KEY', INTERVALS_API_KEY)
+        today = datetime.date.today()
+        start = (today - datetime.timedelta(days=42)).isoformat()
+        end = today.isoformat()
+        
+        # 1. Загрузка
+        hist = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/wellness?oldest={start}&newest={end}", auth=auth).json()
+        raw_curves = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/power-curves", auth=auth).json()
+        events = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/events?oldest={end}&newest={end}", auth=auth).json()
+
+        # Обработка
+        season_curve = {}
+        if isinstance(raw_curves, list) and len(raw_curves) > 0: season_curve = raw_curves[0]
+        elif isinstance(raw_curves, dict): season_curve = raw_curves
+
+        # План
+        plan_txt = "Отдых"
+        if isinstance(events, list):
+            plans = [e['name'] for e in events if e.get('type') in ['Ride','Run','Swim','Workout']]
+            if plans: plan_txt = ", ".join(plans)
+
+        # 2. Графики
+        photo = None
+        try:
+            photo = create_charts(hist, season_curve)
+        except Exception as e:
+            send_telegram_text(f"⚠️ Ошибка создания графиков: {e}")
+
+        # 3. AI
+        last = hist[-1] if (isinstance(hist, list) and hist) else {}
+        w_curr = last.get('weight')
+        w_msg = f"Вес: {w_curr}kg" if w_curr else "Вес не указан"
+
+        prompt = f"""
+        Ты тренер.
+        Данные: Fitness {last.get('ctl')}, Fatigue {last.get('atl')}, Form {last.get('tsb')}.
+        {w_msg}.
+        План сегодня: {plan_txt}.
+        Дай совет по тренировке и питанию. Без форматирования (без жирного текста).
+        """
+        advice = get_ai_advice(prompt)
+
+        # 4. Отправка
+        caption = f"🚴 COACH REPORT 🚴\n\n{advice}"
+        
+        if photo:
+            send_telegram_photo(caption, photo)
+        else:
+            send_telegram_text(caption)
+
+    except Exception as e:
+        err = traceback.format_exc()[-500:]
+        send_telegram_text(f"🔥 CRITICAL ERROR:\n{err}")
+
+if __name__ == "__main__":
+    run_coach()
