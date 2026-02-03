@@ -1,15 +1,17 @@
 import requests
 import datetime
 import os
-import json
 import traceback
 
-# --- КЛЮЧИ ---
+# --- КЛЮЧИ И КООРДИНАТЫ ---
 INTERVALS_ID = os.environ.get("INTERVALS_ID")
 INTERVALS_API_KEY = os.environ.get("INTERVALS_KEY")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_KEY")
 TG_TOKEN = os.environ.get("TG_TOKEN")
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID")
+# Координаты (если нет в секретах, поставь свои цифры здесь вместо os.environ...)
+USER_LAT = os.environ.get("USER_LAT") 
+USER_LON = os.environ.get("USER_LON")
 
 def send_telegram(text):
     if not TG_TOKEN or not TG_CHAT_ID: return
@@ -36,63 +38,84 @@ def get_ai_advice(prompt):
     except Exception as e:
         return f"AI Error: {e}"
 
+# --- ПОГОДНЫЙ БЛОК ---
+def get_weather():
+    if not USER_LAT or not USER_LON:
+        return "Нет координат (добавь USER_LAT/USER_LON в Secrets)"
+    
+    try:
+        # Open-Meteo API (Бесплатно, без ключа)
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={USER_LAT}&longitude={USER_LON}&current_weather=true&windspeed_unit=kmh"
+        res = requests.get(url).json()
+        
+        if 'current_weather' not in res:
+            return "Ошибка погоды"
+            
+        cur = res['current_weather']
+        temp = cur.get('temperature')
+        wind_speed = cur.get('windspeed')
+        wind_dir = cur.get('winddirection') # Градусы
+        
+        # Перевод градусов в направление
+        directions = ["С (Север)", "СВ (Северо-Восток)", "В (Восток)", "ЮВ (Юго-Восток)", 
+                      "Ю (Юг)", "ЮЗ (Юго-Запад)", "З (Запад)", "СЗ (Северо-Запад)"]
+        # Формула: (градусы + 22.5) / 45
+        idx = int((wind_dir + 22.5) % 360 / 45)
+        dir_text = directions[idx]
+        
+        return f"🌡 {temp}°C, 💨 Ветер: {wind_speed} км/ч ({dir_text})"
+    except Exception as e:
+        return f"Сбой погоды: {e}"
+
 def run_coach():
     try:
         auth = ('API_KEY', INTERVALS_API_KEY)
         today = datetime.date.today()
-        # Данные за 60 дней
         start = (today - datetime.timedelta(days=60)).isoformat()
         end = today.isoformat()
         
-        # 1. ЗАГРУЗКА ДАННЫХ
+        # 1. СБОР ДАННЫХ
         wellness = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/wellness?oldest={start}&newest={end}", auth=auth).json()
         events = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/events?oldest={end}&newest={end}", auth=auth).json()
+        weather_msg = get_weather()
 
-        # 2. ПОИСК ФИТНЕСА (CTL)
+        # 2. ФИТНЕС
         ctl = 0.0
-        # Ищем последний известный CTL
         if isinstance(wellness, list):
             for day in reversed(wellness):
                 if day.get('ctl') is not None:
                     ctl = float(day.get('ctl'))
                     break
         
-        # Оценка уровня
-        level_status = "Новичок/Возврат" if ctl < 20 else "В форме"
-
-        # План из календаря
+        # 3. ПЛАН
         plan_txt = "Отдых"
         if isinstance(events, list):
             plans = [e['name'] for e in events if e.get('type') in ['Ride','Run','Swim','Workout']]
             if plans: plan_txt = ", ".join(plans)
 
-        # 3. AI ЗАДАЧА (МУЛЬТИСПОРТ)
+        # 4. AI ЗАДАЧА
         prompt = f"""
-        Ты тренер по триатлону и бегу.
+        Ты велотренер-стратег.
         
-        ДАННЫЕ АТЛЕТА:
-        - Фитнес (CTL): {ctl} ({level_status}).
-        - План в календаре: {plan_txt}.
+        ДАННЫЕ:
+        - Фитнес (CTL): {ctl} (Базовый уровень).
+        - План: {plan_txt}.
+        - ПОГОДА ЗА ОКНОМ: {weather_msg}.
         
         ТВОЯ ЗАДАЧА:
-        Предложи ДВА варианта тренировки на сегодня, чтобы атлет выбрал сам в зависимости от погоды:
-        
-        1. ВАРИАНТ "УЛИЦА" (Если погода хорошая):
-           - Предложи бег или вело на свежем воздухе.
-           - Дай конкретное задание (пульс, время).
+        1. Если погода хорошая для улицы (ветер < 25 км/ч, тепло) -> Предложи маршрут.
+           ВАЖНО: Посоветуй, куда ехать сначала, чтобы бороться с ветром на свежих ногах.
+           (Пример: "Ветер Северный, значит выезжай на Север, чтобы вернуться по ветру").
            
-        2. ВАРИАНТ "ДОМ" (Если плохая погода):
-           - Предложи велостанок (Zwift) или беговую дорожку.
-           - Конкретное задание.
+        2. Если погода "нелетная" (сильный ветер > 30 км/ч, холод) -> Рекомендуй Zwift/Бег.
         
-        Если CTL низкий (<10), настаивай на том, чтобы сделать ХОТЯ БЫ ОДИН из этих вариантов, даже если в плане отдых. Нам нужна база.
+        3. Если CTL низкий, но погода супер -> Мотивируй выйти на улицу, это лучшее время для базы.
         
-        Будь краток. Структура: "☀️ ПОГОДА OK", "🌧 ПОГОДА ПЛОХАЯ".
-        Никаких советов про еду.
+        Будь краток. Формат: "🌤 ПОГОДА / 🚴 ТРЕНИРОВКА / 🧭 СТРАТЕГИЯ ВЕТРА".
         """
         
         advice = get_ai_advice(prompt)
-        send_telegram(f"🏃🚴 COACH V15 (MULTI-SPORT):\n\n{advice}")
+        send_telegram(f"🌪 AERO COACH V16:\n\n{advice}")
 
     except Exception as e:
         send_telegram(f"Error: {traceback.format_exc()[-300:]}")
