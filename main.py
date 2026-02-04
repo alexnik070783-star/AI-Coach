@@ -32,28 +32,5 @@ def run_audit():
         base_api = f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}"
         
         print(f"Скачиваю архив с {start} по {end}...")
+        # Получаем активности
         activities = requests.get(f"{base_api}/activities?oldest={start}&newest={end}", auth=auth).json()
-        wellness = requests.get(f"{base_api}/wellness?oldest={start}&newest={end}", auth=auth).json()
-
-        if not activities:
-            send_telegram("❌ В архиве за 90 дней пусто. Интервалс ничего не отдал.")
-            return
-
-        # --- АНАЛИЗ 1: ОБЪЕМЫ ---
-        total_time = 0
-        ride_count = 0
-        run_count = 0
-        zwift_count = 0
-        
-        for a in activities:
-            total_time += a.get('moving_time', 0)
-            atype = a.get('type')
-            
-            if atype == 'Ride': ride_count += 1
-            if atype == 'VirtualRide': 
-                ride_count += 1
-                zwift_count += 1
-            if atype == 'Run' or atype == 'Walk': run_count += 1
-        
-        # --- АНАЛИЗ 2: ВЕС ---
-        # С
