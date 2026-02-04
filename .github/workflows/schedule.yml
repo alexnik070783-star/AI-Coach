@@ -2,29 +2,26 @@ name: AI Coach Daily
 
 on:
   schedule:
-    # Время в UTC. Нидерланды зимой = UTC+1.
-    # 6:00 UTC = 7:00 утра NL
-    - cron: '0 6 * * *'
-    # 21:00 UTC = 22:00 вечера NL
-    - cron: '0 21 * * *'
-  workflow_dispatch: # Кнопка для ручного запуска
+    # 19:00 UTC = 22:00 по Минску/Москве
+    - cron: '0 19 * * *'
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
-        
-      - name: Setup Python
-        uses: actions/setup-python@v2
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-          
+
       - name: Install dependencies
-        # ЗДЕСЬ МЫ ДОБАВИЛИ matplotlib ДЛЯ ГРАФИКОВ
-        run: pip install requests matplotlib
-        
+        run: |
+          pip install requests matplotlib
+
       - name: Run Coach
         env:
           INTERVALS_ID: ${{ secrets.INTERVALS_ID }}
@@ -32,4 +29,7 @@ jobs:
           GOOGLE_KEY: ${{ secrets.GOOGLE_KEY }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          # Координаты берем из секретов или они будут в коде
+          USER_LAT: ${{ secrets.USER_LAT }}
+          USER_LON: ${{ secrets.USER_LON }}
         run: python main.py
