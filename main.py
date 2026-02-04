@@ -29,7 +29,6 @@ def send_telegram(text):
 
 def get_ai_advice(prompt):
     try:
-        # Безопасная сборка URL
         base_url = "https://generativelanguage.googleapis.com/v1beta"
         
         # 1. Модель
@@ -83,7 +82,6 @@ def get_athlete_profile(auth):
 
 # --- 🥗 ПИТАНИЕ (КАЛОРИИ) ---
 def analyze_nutrition(wellness_data, age):
-    # 1. Вес
     current_weight = 78.0 
     for day in reversed(wellness_data):
         w = day.get('weight')
@@ -91,11 +89,9 @@ def analyze_nutrition(wellness_data, age):
             current_weight = float(w)
             break
 
-    # 2. BMR
     bmr = (10 * current_weight) + (6.25 * USER_HEIGHT) - (5 * age) + 5
     daily_norm = bmr * 1.2 
     
-    # 3. Еда
     if not wellness_data:
         return f"Вес: {current_weight}кг. Нет данных.", 0, current_weight
     
@@ -115,56 +111,92 @@ def analyze_nutrition(wellness_data, age):
     report = f"""
     📊 ПИТАНИЕ (Вес {current_weight}кг):
     • Съедено: {eaten} ккал
-    • Базовая Норма (BMR+Life): ~{int(daily_norm)} ккал
-    • Баланс (без учета спорта): {balance:+.0f} ккал
-    (Данные по БЖУ отсутствуют, анализируем только калораж)
+    • Норма (Life): ~{int(daily_norm)} ккал
+    • Баланс: {balance:+.0f} ккал
     """
     return report, balance, current_weight
 
-# --- 🧠 БИОМЕТРИКА ---
+# --- 🧬 БИОХАКИНГ (ПОЛНЫЙ СКАН) ---
 def analyze_neuro(wellness_data):
     if not wellness_data or len(wellness_data) < 2:
         return "Мало данных", "GREEN"
     
+    # Собираем списки данных
     hrv_list = [d.get('hrv') for d in wellness_data if d.get('hrv')]
+    rhr_list = [d.get('restingHR') for d in wellness_data if d.get('restingHR')]
     sleep_list = [d.get('sleepSecs') for d in wellness_data if d.get('sleepSecs')]
-    today_hrv = hrv_list[-1] if hrv_list else None
+    
+    # Последние данные
+    last_day = wellness_data[-1]
+    today_hrv = last_day.get('hrv')
+    today_rhr = last_day.get('restingHR')
+    today_spo2 = last_day.get('spO2')
+    readiness = last_day.get('readiness') # Готовность от Intervals
+    bp_sys = last_day.get('systolic')
     
     status = "GREEN"
     details = []
     
-    # 1. HRV
+    # 1. HRV (Вариабельность)
     if today_hrv and len(hrv_list) > 3:
-        avg = statistics.mean(hrv_list[:-1])
-        diff = ((today_hrv - avg)/avg)*100
-        if diff < -10: 
+        avg_hrv = statistics.mean(hrv_list[:-1]) # Среднее без сегодня
+        diff_hrv = ((today_hrv - avg_hrv) / avg_hrv) * 100
+        if diff_hrv < -15: 
             status = "RED"
-            details.append(f"HRV упал ({diff:.0f}%)")
+            details.append(f"HRV упал ({diff_hrv:.0f}%)")
+        elif diff_hrv < -5:
+            if status == "GREEN": status = "YELLOW"
+            details.append(f"HRV ниже нормы")
         else:
-            details.append(f"HRV норм")
+            details.append(f"HRV ок")
+
+    # 2. RHR (Пульс покоя) - Важнейший маркер!
+    if today_rhr and len(rhr_list) > 3:
+        avg_rhr = statistics.mean(rhr_list[:-1])
+        diff_rhr = today_rhr - avg_rhr
+        if diff_rhr > 5:
+            status = "RED"
+            details.append(f"Пульс покоя +{diff_rhr:.0f} уд! (Усталость?)")
+        elif diff_rhr > 2:
+            if status == "GREEN": status = "YELLOW"
+            details.append(f"Пульс покоя высоковат")
+        else:
+            details.append(f"Пульс {today_rhr} (Норм)")
+
+    # 3. SpO2 (Кислород)
+    if today_spo2:
+        if today_spo2 < 95:
+            status = "RED"
+            details.append(f"SpO2 низкий ({today_spo2}%)")
+        else:
+            details.append(f"SpO2 {today_spo2}%")
             
-    # 2. Сон
+    # 4. Сон
     if sleep_list:
         last_sleep = sleep_list[-1] / 3600
         if last_sleep < 6:
-            # Исправленная логика без однострочников
-            if status != "RED":
-                status = "YELLOW"
+            if status == "GREEN": status = "YELLOW"
             details.append(f"Сон {last_sleep:.1f}ч (Мало)")
         else:
             details.append(f"Сон {last_sleep:.1f}ч")
-            
-    return ", ".join(details), status
+
+    # Итоговый отчет
+    full_text = ", ".join(details)
+    if readiness:
+        full_text += f". Готовность системы: {readiness}%"
+        
+    return full_text, status
 
 # --- ЗАПУСК ---
 def run_coach():
     try:
         auth = ('API_KEY', INTERVALS_API_KEY)
         today = datetime.date.today()
-        start = (today - datetime.timedelta(days=7)).isoformat()
+        # Берем 14 дней для лучшей статистики
+        start = (today - datetime.timedelta(days=14)).isoformat()
         end = today.isoformat()
         
-        # Ссылки
+        # URLs
         base_api = f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}"
         w_url = f"{base_api}/wellness?oldest={start}&newest={end}"
         wellness = requests.get(w_url, auth=auth).json()
@@ -191,37 +223,40 @@ def run_coach():
             if plans: plan_txt = ", ".join(plans)
 
         prompt = f"""
-        Ты тренер, нутрициолог и биохакер.
+        Ты умный тренер-биохакер. Анализируй глубоко.
         
         ДАННЫЕ АТЛЕТА:
-        - Вес: {actual_weight} кг.
-        - Возраст: {user_age} лет.
-        - Цель: Рекомпозиция (Сжигание жира).
-        - CTL: {ctl:.1f}.
-        - Здоровье: {bio_status} ({bio_text}).
+        - Вес: {actual_weight} кг. Возраст: {user_age}.
+        - Цель: Рекомпозиция.
+        - CTL (Фитнес): {ctl:.1f}.
+        - БИОМЕТРИКА: {bio_status} ({bio_text}).
         - Погода: {weather_msg}.
-        - План: {plan_txt}.
+        - План в календаре: {plan_txt}.
         
-        ОТЧЕТ ПО ПИТАНИЮ (Только Калории):
+        ОТЧЕТ ПО ПИТАНИЮ:
         {nutri_text}
         
         ЗАДАЧА:
-        1. АНАЛИЗ КАЛОРИЙ:
-           - Оцени Дефицит/Профицит.
-           - Если Дефицит > 800 ккал -> "Опасно голодно!".
-           - Если Дефицит 300-500 ккал -> "Хороший темп".
+        1. ОЦЕНКА СОСТОЯНИЯ (Приоритет №1):
+           - Посмотри на Пульс Покоя (RHR) и HRV. 
+           - Если пульс вырос, а HRV упал -> Это стресс/болезнь. Отменяй тяжелую тренировку!
+           - Если SpO2 ниже 95 -> Предупреди о гипоксии/здоровье.
            
         2. ТРЕНИРОВКА:
-           - Дай задание, учитывая погоду и здоровье.
+           - Адаптируй план под "Здоровье" и "Погоду".
+           - Если статус RED -> Только легкая растяжка или сон.
+           
+        3. СОВЕТ ПО ЕДЕ:
+           - Исходя из дефицита калорий.
         
         Ответь:
-        🥗 БАЛАНС: ...
+        🧬 СОСТОЯНИЕ: ... (Твой анализ биометрии)
         🚀 ТРЕНИРОВКА: ...
-        🍎 СОВЕТ: ...
+        🥗 ПИТАНИЕ: ...
         """
         
         advice = get_ai_advice(prompt)
-        send_telegram(f"📉 COACH V24.1 (FIX):\n\n{advice}")
+        send_telegram(f"🧬 COACH V25 (BIO-HACKER):\n\n{advice}")
 
     except Exception as e:
         send_telegram(f"Error: {traceback.format_exc()[-300:]}")
