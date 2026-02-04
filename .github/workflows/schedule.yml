@@ -3,16 +3,17 @@ name: AI Coach Daily
 on:
   schedule:
     # --- РАСПИСАНИЕ (ВРЕМЯ UTC) ---
-    # 06:00 UTC = 07:00 Нидерланды (зима) / 09:00 Минск
+    
+    # 1. УТРО: 06:00 UTC = 07:00 NL / 09:00 Минск
     - cron: '0 6 * * *'
     
-    # 19:00 UTC = 20:00 Нидерланды / 22:00 Минск
-    - cron: '0 19 * * *'
+    # 2. ДЕНЬ: 13:00 UTC = 14:00 NL / 16:00 Минск
+    - cron: '0 13 * * *'
     
-    # 21:00 UTC = 22:00 Нидерланды / 00:00 Минск
+    # 3. ВЕЧЕР: 21:00 UTC = 22:00 NL / 00:00 Минск
     - cron: '0 21 * * *'
 
-  # Кнопка для ручного запуска (Run workflow)
+  # Кнопка для ручного запуска
   workflow_dispatch:
 
 jobs:
@@ -20,30 +21,25 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      # 1. Скачиваем код репозитория
       - name: Check out code
         uses: actions/checkout@v4
 
-      # 2. Настраиваем Python
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
-      # 3. Устанавливаем библиотеки (requests + matplotlib)
       - name: Install dependencies
-        run: pip install requests matplotlib
+        run: pip install requests
 
-      # 4. Запускаем бота
       - name: Run Coach
         env:
-          # Секреты из настроек репозитория
           INTERVALS_ID: ${{ secrets.INTERVALS_ID }}
           INTERVALS_KEY: ${{ secrets.INTERVALS_KEY }}
           GOOGLE_KEY: ${{ secrets.GOOGLE_KEY }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          # Координаты (если они заданы в Secrets, иначе код возьмет свои)
+          # Координаты берутся из секретов (если заданы) или дефолтные из кода
           USER_LAT: ${{ secrets.USER_LAT }}
           USER_LON: ${{ secrets.USER_LON }}
         run: python main.py
