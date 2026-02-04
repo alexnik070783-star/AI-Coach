@@ -15,7 +15,7 @@ TG_CHAT_ID = os.environ.get("TG_CHAT_ID")
 USER_LAT = "53.23"       # Несвиж
 USER_LON = "26.66"
 USER_HEIGHT = 182.0      # Рост (см)
-USER_BIRTH_YEAR = 1983   # <-- ИСПРАВИЛ (07.07.1983)
+USER_BIRTH_YEAR = 1983   # ДР 07.07.1983
 
 # --- ФУНКЦИИ ---
 def send_telegram(text):
@@ -63,7 +63,7 @@ def analyze_nutrition(wellness_data, current_age):
             current_weight = float(w)
             break
             
-    # Динамический расчет BMR (учитывает возраст)
+    # BMR
     bmr = (10 * current_weight) + (6.25 * USER_HEIGHT) - (5 * current_age) + 5
     daily_norm = bmr * 1.2 
     
@@ -82,7 +82,7 @@ def analyze_nutrition(wellness_data, current_age):
     report = f"Съедено: {eaten} ккал. Баланс: {balance:+.0f} ккал"
     return report, balance, current_weight
 
-# --- 🧬 БИОМЕТРИКА ---
+# --- 🧬 БИОМЕТРИКА (С СРАВНЕНИЕМ) ---
 def analyze_neuro(wellness_data):
     if not wellness_data: return "Нет данных", "GREEN"
     
@@ -98,25 +98,33 @@ def analyze_neuro(wellness_data):
     details = []
     status = "GREEN"
     
-    # 1. HRV
+    # 1. HRV (Сравниваем со средним)
     if today_hrv:
-        avg_hrv = statistics.mean(hrv_list[:-1]) if len(hrv_list) > 1 else today_hrv
+        # Считаем среднее БЕЗ сегодняшнего дня (если возможно), чтобы увидеть базу
+        prev_list = hrv_list[:-1] if len(hrv_list) > 1 else hrv_list
+        avg_hrv = statistics.mean(prev_list)
         diff_hrv = ((today_hrv - avg_hrv)/avg_hrv)*100
-        txt = f"HRV {today_hrv:.0f}ms"
+        
+        # Формируем строку: "HRV 35 (Avg 34)"
+        txt = f"HRV {today_hrv:.0f}ms (Средн {avg_hrv:.0f})"
+        
         if diff_hrv < -10: 
-            txt += f" (📉 -{abs(diff_hrv):.0f}%)"
+            txt += f" 📉 упал на {abs(diff_hrv):.0f}%"
             status = "RED"
         details.append(txt)
     else:
         details.append("HRV -")
 
-    # 2. RHR
+    # 2. Пульс (RHR)
     if today_rhr:
-        avg_rhr = statistics.mean(rhr_list[:-1]) if len(rhr_list) > 1 else today_rhr
+        prev_list = rhr_list[:-1] if len(rhr_list) > 1 else rhr_list
+        avg_rhr = statistics.mean(prev_list)
         diff_rhr = today_rhr - avg_rhr
-        txt = f"RHR {today_rhr:.0f}"
+        
+        txt = f"RHR {today_rhr:.0f}уд (Средн {avg_rhr:.0f})"
+        
         if diff_rhr > 5:
-            txt += f" (📈 +{diff_rhr:.0f}!)"
+            txt += f" 📈 +{diff_rhr:.0f}!"
             status = "RED" if status != "RED" else "RED"
         details.append(txt)
     else:
@@ -136,9 +144,8 @@ def run_coach():
         start = (today - datetime.timedelta(days=14)).isoformat()
         end = today.isoformat()
         
-        # 1. СЧИТАЕМ ВОЗРАСТ (С учетом дня рождения)
-        # Если сегодня ДО дня рождения - вычитаем 1 год
-        is_birthday_passed = (today.month, today.day) >= (7, 7) # 7 июля
+        # Возраст
+        is_birthday_passed = (today.month, today.day) >= (7, 7)
         real_age = today.year - USER_BIRTH_YEAR - (0 if is_birthday_passed else 1)
         
         base_api = f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}"
@@ -164,26 +171,28 @@ def run_coach():
         Ты личный тренер (биохакер).
         
         ДАННЫЕ:
-        - Возраст: {real_age} лет (ДР: 07.07.{USER_BIRTH_YEAR}).
-        - Вес: {actual_weight} кг.
+        - Возраст: {real_age} лет. Вес: {actual_weight} кг.
         - БИОМЕТРИКА: {bio_text}.
+        (Внимание: Сравнивай HRV и RHR с их "Средн" значениями в скобках. Если отклонение небольшое — это НОРМА, не паникуй).
         - CTL: {ctl:.1f}.
         - Погода: {weather_msg}.
         - Питание: {nutri_text}.
         
-        ИНСТРУКЦИЯ:
-        1. БИОМЕТРИКА: Оцени состояние (HRV, Пульс).
-        2. ПИТАНИЕ: Дай совет исходя из дефицита. Если <500 ккал, напомни проверить запись.
-        3. ПЛАН: Адаптируй под погоду и статус.
+        ЗАДАЧА:
+        1. Анализ HRV/Пульса:
+           - Если "HRV 30 (Средн 30)" -> Пиши "HRV в вашей норме".
+           - Только если сильное отклонение -> давай совет по восстановлению.
+        2. Питание: Если <500 ккал, напомни проверить запись.
+        3. Тренировка: План на сегодня с учетом погоды.
         
         Формат:
-        🧬 БИОМЕТРИКА: ...
+        🧬 СОСТОЯНИЕ: ...
         🥗 ПИТАНИЕ: ...
         🚀 ПЛАН: ...
         """
         
         advice = get_ai_advice(prompt)
-        send_telegram(f"🤖 COACH V25.3 (1983):\n\n{advice}")
+        send_telegram(f"🤖 COACH V25.4 (AVG COMPARE):\n\n{advice}")
 
     except Exception as e:
         send_telegram(f"Error: {traceback.format_exc()[-300:]}")
