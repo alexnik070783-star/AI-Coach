@@ -2,24 +2,17 @@ name: AI Coach Daily
 
 on:
   schedule:
-    # --- РАСПИСАНИЕ (ВРЕМЯ UTC для Несвижа UTC+3) ---
-    
-    # 1. УТРО: 04:00 UTC = 07:00 Несвиж
+    # 04:00 UTC = 07:00 Несвиж
     - cron: '0 4 * * *'
-    
-    # 2. ДЕНЬ: 11:00 UTC = 14:00 Несвиж
+    # 11:00 UTC = 14:00 Несвиж
     - cron: '0 11 * * *'
-    
-    # 3. ВЕЧЕР: 19:00 UTC = 22:00 Несвиж
+    # 19:00 UTC = 22:00 Несвиж
     - cron: '0 19 * * *'
-
-  # Кнопка для ручного запуска
   workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -29,8 +22,9 @@ jobs:
         with:
           python-version: '3.9'
 
+      # ДОБАВИЛИ matplotlib и numpy
       - name: Install dependencies
-        run: pip install requests
+        run: pip install requests matplotlib numpy
 
       - name: Run Coach
         env:
@@ -39,7 +33,6 @@ jobs:
           GOOGLE_KEY: ${{ secrets.GOOGLE_KEY }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          # Координаты Несвижа
           USER_LAT: ${{ secrets.USER_LAT }}
           USER_LON: ${{ secrets.USER_LON }}
         run: python main.py
