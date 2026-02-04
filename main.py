@@ -14,7 +14,7 @@ TG_CHAT_ID = os.environ.get("TG_CHAT_ID")
 # --- 🌍 НАСТРОЙКИ ---
 USER_LAT = "53.23"       # Несвиж
 USER_LON = "26.66"
-USER_HEIGHT = 182.0      # <-- Твой рост (константа)
+USER_HEIGHT = 182.0      # Рост (см)
 
 # --- ФУНКЦИИ ---
 def send_telegram(text):
@@ -29,8 +29,12 @@ def send_telegram(text):
 
 def get_ai_advice(prompt):
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GOOGLE_API_KEY}"
-        data = requests.get(url).json()
+        # Разбиваем длинную ссылку для безопасности
+        base_url = "https://generativelanguage.googleapis.com/v1beta"
+        
+        # 1. Получаем модель
+        models_url = f"{base_url}/models?key={GOOGLE_API_KEY}"
+        data = requests.get(models_url).json()
         model = "models/gemini-1.5-flash"
         if 'models' in data:
             for m in data['models']:
@@ -38,16 +42,19 @@ def get_ai_advice(prompt):
                     model = m['name']
                     break
         
-        api = f"https://generativelanguage.googleapis.com/v1beta/{model}:generateContent?key={GOOGLE_API_KEY}"
-        res = requests.post(api, json={"contents": [{"parts": [{"text": prompt}]}]})
+        # 2. Генерируем ответ
+        generate_url = f"{base_url}/{model}:generateContent?key={GOOGLE_API_KEY}"
+        res = requests.post(generate_url, json={"contents": [{"parts": [{"text": prompt}]}]})
         return res.json()['candidates'][0]['content']['parts'][0]['text']
     except Exception as e:
         return f"AI Error: {e}"
 
 def get_weather():
     try:
-        url = f"https://api.open-meteo.com/v1/forecast?latitude={USER_LAT}&longitude={USER_LON}&current_weather=true&windspeed_unit=kmh"
-        res = requests.get(url, timeout=10).json()
+        base = "https://api.open-meteo.com/v1/forecast"
+        params = f"?latitude={USER_LAT}&longitude={USER_LON}&current_weather=true&windspeed_unit=kmh"
+        res = requests.get(base + params, timeout=10).json()
+        
         if 'current_weather' not in res:
             return "Нет погоды"
         
@@ -58,7 +65,7 @@ def get_weather():
     except Exception:
         return "Ошибка погоды"
 
-# --- 👤 ПОЛУЧЕНИЕ ВОЗРАСТА ---
+# --- 👤 ПРОФИЛЬ ---
 def get_athlete_profile(auth):
     try:
         url = f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}"
@@ -70,14 +77,13 @@ def get_athlete_profile(auth):
             dob = datetime.datetime.strptime(dob_str, "%Y-%m-%d").date()
             today = datetime.date.today()
             age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-            
         return age
     except Exception:
         return 35
 
-# --- 🥗 АНАЛИЗ ПИТАНИЯ (ЗАЩИЩЕННЫЙ) ---
+# --- 🥗 ПИТАНИЕ ---
 def analyze_nutrition(wellness_data, age):
-    # 1. Авто-вес (с защитой от None)
+    # 1. Вес
     current_weight = 78.0 
     for day in reversed(wellness_data):
         w = day.get('weight')
@@ -95,16 +101,14 @@ def analyze_nutrition(wellness_data, age):
     
     last_day_with_food = None
     for day in reversed(wellness_data):
-        # Используем (val or 0), чтобы превратить None в 0
         kcal = day.get('kcalConsumed') or 0
         if kcal > 0:
             last_day_with_food = day
             break
             
     if not last_day_with_food:
-        return f"⚠️ Вес {current_weight}кг. Данные о еде не найдены (или они равны 0).", 0, current_weight
+        return f"⚠️ Вес {current_weight}кг. Данные о еде не найдены (или 0).", 0, current_weight
 
-    # Безопасное извлечение
     eaten = last_day_with_food.get('kcalConsumed') or 0
     prot = last_day_with_food.get('protein') or 0
     fat = last_day_with_food.get('fat') or 0
@@ -146,7 +150,7 @@ def analyze_neuro(wellness_data):
         last_sleep = sleep_list[-1] / 3600
         if last_sleep < 6:
             status = "RED" if status == "RED" else "YELLOW"
-            details.append(f"Сон {last_sleep:.1f}ч (Мало)")
+            details.append(f"Сон {last_sleep:.1f}ч")
         else:
             details.append(f"Сон {last_sleep:.1f}ч")
             
@@ -160,4 +164,67 @@ def run_coach():
         start = (today - datetime.timedelta(days=7)).isoformat()
         end = today.isoformat()
         
-        wellness = requests.get(f"https://intervals
+        # URL теперь короткие и собираются по частям
+        base_api = f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}"
+        
+        # Wellness
+        w_url = f"{base_api}/wellness?oldest={start}&newest={end}"
+        wellness = requests.get(w_url, auth=auth).json()
+        
+        # Events
+        e_url = f"{base_api}/events?oldest={end}&newest={end}"
+        events = requests.get(e_url, auth=auth).json()
+        
+        weather_msg = get_weather()
+        user_age = get_athlete_profile(auth)
+        
+        ctl = 0.0
+        if isinstance(wellness, list):
+            for day in reversed(wellness):
+                if day.get('ctl') is not None:
+                    ctl = float(day.get('ctl'))
+                    break
+        
+        nutri_text, balance, actual_weight = analyze_nutrition(wellness, user_age)
+        bio_text, bio_status = analyze_neuro(wellness)
+
+        plan_txt = "Отдых"
+        if isinstance(events, list):
+            plans = [e['name'] for e in events if e.get('type') in ['Ride','Run','Swim','Workout']]
+            if plans: plan_txt = ", ".join(plans)
+
+        prompt = f"""
+        Ты тренер, нутрициолог и биохакер.
+        
+        ДАННЫЕ АТЛЕТА (Auto):
+        - Вес: {actual_weight} кг.
+        - Рост: {USER_HEIGHT} см.
+        - Возраст: {user_age} лет.
+        - Цель: Рекомпозиция.
+        - CTL: {ctl:.1f}.
+        - Здоровье: {bio_status} ({bio_text}).
+        - Погода: {weather_msg}.
+        - План: {plan_txt}.
+        
+        ОТЧЕТ ПО ПИТАНИЮ:
+        {nutri_text}
+        
+        ЗАДАЧА:
+        1. Если данных о еде нет — напомни про синхронизацию, но тренировку дай.
+        2. Если данные есть — оцени дефицит и белок.
+        3. Дай задание на тренировку.
+        
+        Ответь:
+        🥗 ПИТАНИЕ: ...
+        🚀 ТРЕНИРОВКА: ...
+        🍎 СОВЕТ: ...
+        """
+        
+        advice = get_ai_advice(prompt)
+        send_telegram(f"🤖 COACH V23.4 (SafeLines):\n\n{advice}")
+
+    except Exception as e:
+        send_telegram(f"Error: {traceback.format_exc()[-300:]}")
+
+if __name__ == "__main__":
+    run_coach()
