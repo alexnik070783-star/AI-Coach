@@ -58,13 +58,13 @@ def get_weather():
     except Exception:
         return "Ошибка погоды"
 
-# --- 👤 ПОЛУЧЕНИЕ ВОЗРАСТА (АВТО) ---
+# --- 👤 ПОЛУЧЕНИЕ ВОЗРАСТА ---
 def get_athlete_profile(auth):
     try:
         url = f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}"
         profile = requests.get(url, auth=auth).json()
         
-        dob_str = profile.get('dob', None)
+        dob_str = profile.get('dob')
         age = 35 # Дефолт
         if dob_str:
             dob = datetime.datetime.strptime(dob_str, "%Y-%m-%d").date()
@@ -75,37 +75,40 @@ def get_athlete_profile(auth):
     except Exception:
         return 35
 
-# --- 🥗 АНАЛИЗ ПИТАНИЯ (АВТО-ВЕС) ---
+# --- 🥗 АНАЛИЗ ПИТАНИЯ (ЗАЩИЩЕННЫЙ) ---
 def analyze_nutrition(wellness_data, age):
-    # 1. Авто-вес из последних данных
+    # 1. Авто-вес (с защитой от None)
     current_weight = 78.0 
     for day in reversed(wellness_data):
-        w = day.get('weight', None)
-        if w and w > 0:
+        w = day.get('weight')
+        if w and float(w) > 0:
             current_weight = float(w)
             break
 
-    # 2. BMR (Миффлин-Сан Жеор)
+    # 2. BMR
     bmr = (10 * current_weight) + (6.25 * USER_HEIGHT) - (5 * age) + 5
     daily_norm = bmr * 1.2 
     
-    # 3. Еда
-    if len(wellness_data) < 1:
-        return f"Вес: {current_weight}кг. Нет данных о еде.", 0, current_weight
+    # 3. Еда (с защитой от None)
+    if not wellness_data:
+        return f"Вес: {current_weight}кг. Нет данных.", 0, current_weight
     
     last_day_with_food = None
     for day in reversed(wellness_data):
-        if day.get('kcalConsumed', 0) > 0:
+        # Используем (val or 0), чтобы превратить None в 0
+        kcal = day.get('kcalConsumed') or 0
+        if kcal > 0:
             last_day_with_food = day
             break
             
     if not last_day_with_food:
-        return f"⚠️ Вес {current_weight}кг. Данные о еде не найдены.", 0, current_weight
+        return f"⚠️ Вес {current_weight}кг. Данные о еде не найдены (или они равны 0).", 0, current_weight
 
-    eaten = last_day_with_food.get('kcalConsumed', 0)
-    prot = last_day_with_food.get('protein', 0)
-    fat = last_day_with_food.get('fat', 0)
-    carbs = last_day_with_food.get('carbs', 0)
+    # Безопасное извлечение
+    eaten = last_day_with_food.get('kcalConsumed') or 0
+    prot = last_day_with_food.get('protein') or 0
+    fat = last_day_with_food.get('fat') or 0
+    carbs = last_day_with_food.get('carbs') or 0
     
     balance = eaten - daily_norm
     
@@ -120,7 +123,7 @@ def analyze_nutrition(wellness_data, age):
 
 # --- 🧠 БИОМЕТРИКА ---
 def analyze_neuro(wellness_data):
-    if len(wellness_data) < 2:
+    if not wellness_data or len(wellness_data) < 2:
         return "Мало данных", "GREEN"
     
     hrv_list = [d.get('hrv') for d in wellness_data if d.get('hrv')]
@@ -157,59 +160,4 @@ def run_coach():
         start = (today - datetime.timedelta(days=7)).isoformat()
         end = today.isoformat()
         
-        wellness = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/wellness?oldest={start}&newest={end}", auth=auth).json()
-        events = requests.get(f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}/events?oldest={end}&newest={end}", auth=auth).json()
-        weather_msg = get_weather()
-        
-        user_age = get_athlete_profile(auth)
-        
-        ctl = 0.0
-        if isinstance(wellness, list):
-            for day in reversed(wellness):
-                if day.get('ctl') is not None:
-                    ctl = float(day.get('ctl'))
-                    break
-        
-        nutri_text, balance, actual_weight = analyze_nutrition(wellness, user_age)
-        bio_text, bio_status = analyze_neuro(wellness)
-
-        plan_txt = "Отдых"
-        if isinstance(events, list):
-            plans = [e['name'] for e in events if e.get('type') in ['Ride','Run','Swim','Workout']]
-            if plans: plan_txt = ", ".join(plans)
-
-        prompt = f"""
-        Ты тренер, нутрициолог и биохакер.
-        
-        ДАННЫЕ АТЛЕТА (Auto):
-        - Вес: {actual_weight} кг (из Intervals).
-        - Рост: {USER_HEIGHT} см.
-        - Возраст: {user_age} лет.
-        - Цель: Рекомпозиция.
-        - CTL: {ctl:.1f}.
-        - Здоровье: {bio_status} ({bio_text}).
-        - Погода: {weather_msg}.
-        - План: {plan_txt}.
-        
-        ОТЧЕТ ПО ПИТАНИЮ:
-        {nutri_text}
-        
-        ЗАДАЧА:
-        1. Если данных о еде нет — напомни про синхронизацию, но тренировку дай.
-        2. Если данные есть — оцени дефицит и белок.
-        3. Дай задание на тренировку.
-        
-        Ответь:
-        🥗 ПИТАНИЕ: ...
-        🚀 ТРЕНИРОВКА: ...
-        🍎 СОВЕТ: ...
-        """
-        
-        advice = get_ai_advice(prompt)
-        send_telegram(f"🤖 COACH V23.2:\n\n{advice}")
-
-    except Exception as e:
-        send_telegram(f"Error: {traceback.format_exc()[-300:]}")
-
-if __name__ == "__main__":
-    run_coach()
+        wellness = requests.get(f"https://intervals
