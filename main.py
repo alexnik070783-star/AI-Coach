@@ -29,10 +29,10 @@ def send_telegram(text):
 
 def get_ai_advice(prompt):
     try:
-        # Разбиваем длинную ссылку для безопасности
+        # Безопасная ссылка
         base_url = "https://generativelanguage.googleapis.com/v1beta"
         
-        # 1. Получаем модель
+        # 1. Модель
         models_url = f"{base_url}/models?key={GOOGLE_API_KEY}"
         data = requests.get(models_url).json()
         model = "models/gemini-1.5-flash"
@@ -42,9 +42,9 @@ def get_ai_advice(prompt):
                     model = m['name']
                     break
         
-        # 2. Генерируем ответ
-        generate_url = f"{base_url}/{model}:generateContent?key={GOOGLE_API_KEY}"
-        res = requests.post(generate_url, json={"contents": [{"parts": [{"text": prompt}]}]})
+        # 2. Генерация
+        gen_url = f"{base_url}/{model}:generateContent?key={GOOGLE_API_KEY}"
+        res = requests.post(gen_url, json={"contents": [{"parts": [{"text": prompt}]}]})
         return res.json()['candidates'][0]['content']['parts'][0]['text']
     except Exception as e:
         return f"AI Error: {e}"
@@ -72,7 +72,7 @@ def get_athlete_profile(auth):
         profile = requests.get(url, auth=auth).json()
         
         dob_str = profile.get('dob')
-        age = 35 # Дефолт
+        age = 35 
         if dob_str:
             dob = datetime.datetime.strptime(dob_str, "%Y-%m-%d").date()
             today = datetime.date.today()
@@ -81,7 +81,7 @@ def get_athlete_profile(auth):
     except Exception:
         return 35
 
-# --- 🥗 ПИТАНИЕ ---
+# --- 🥗 ПИТАНИЕ (ТОЛЬКО КАЛОРИИ) ---
 def analyze_nutrition(wellness_data, age):
     # 1. Вес
     current_weight = 78.0 
@@ -91,11 +91,11 @@ def analyze_nutrition(wellness_data, age):
             current_weight = float(w)
             break
 
-    # 2. BMR
+    # 2. BMR (Базовый обмен + Бытовая активность)
     bmr = (10 * current_weight) + (6.25 * USER_HEIGHT) - (5 * age) + 5
     daily_norm = bmr * 1.2 
     
-    # 3. Еда (с защитой от None)
+    # 3. Еда
     if not wellness_data:
         return f"Вес: {current_weight}кг. Нет данных.", 0, current_weight
     
@@ -107,21 +107,19 @@ def analyze_nutrition(wellness_data, age):
             break
             
     if not last_day_with_food:
-        return f"⚠️ Вес {current_weight}кг. Данные о еде не найдены (или 0).", 0, current_weight
+        return f"⚠️ Вес {current_weight}кг. Данные о еде не найдены (0 ккал).", 0, current_weight
 
     eaten = last_day_with_food.get('kcalConsumed') or 0
-    prot = last_day_with_food.get('protein') or 0
-    fat = last_day_with_food.get('fat') or 0
-    carbs = last_day_with_food.get('carbs') or 0
+    # БЖУ игнорируем, так как их нет
     
     balance = eaten - daily_norm
     
     report = f"""
-    📊 ПИТАНИЕ (Вес {current_weight}кг, Возраст {age}):
+    📊 ПИТАНИЕ (Вес {current_weight}кг):
     • Съедено: {eaten} ккал
-    • Норма (Life): ~{int(daily_norm)} ккал
-    • Б/Ж/У: {prot} / {fat} / {carbs}
-    • Белок: {prot / current_weight:.1f} г/кг
+    • Базовая Норма (BMR+Life): ~{int(daily_norm)} ккал
+    • Баланс (без учета спорта): {balance:+.0f} ккал
+    (Данные по БЖУ отсутствуют, анализируем только калораж)
     """
     return report, balance, current_weight
 
@@ -149,82 +147,4 @@ def analyze_neuro(wellness_data):
     if sleep_list:
         last_sleep = sleep_list[-1] / 3600
         if last_sleep < 6:
-            status = "RED" if status == "RED" else "YELLOW"
-            details.append(f"Сон {last_sleep:.1f}ч")
-        else:
-            details.append(f"Сон {last_sleep:.1f}ч")
-            
-    return ", ".join(details), status
-
-# --- ЗАПУСК ---
-def run_coach():
-    try:
-        auth = ('API_KEY', INTERVALS_API_KEY)
-        today = datetime.date.today()
-        start = (today - datetime.timedelta(days=7)).isoformat()
-        end = today.isoformat()
-        
-        # URL теперь короткие и собираются по частям
-        base_api = f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}"
-        
-        # Wellness
-        w_url = f"{base_api}/wellness?oldest={start}&newest={end}"
-        wellness = requests.get(w_url, auth=auth).json()
-        
-        # Events
-        e_url = f"{base_api}/events?oldest={end}&newest={end}"
-        events = requests.get(e_url, auth=auth).json()
-        
-        weather_msg = get_weather()
-        user_age = get_athlete_profile(auth)
-        
-        ctl = 0.0
-        if isinstance(wellness, list):
-            for day in reversed(wellness):
-                if day.get('ctl') is not None:
-                    ctl = float(day.get('ctl'))
-                    break
-        
-        nutri_text, balance, actual_weight = analyze_nutrition(wellness, user_age)
-        bio_text, bio_status = analyze_neuro(wellness)
-
-        plan_txt = "Отдых"
-        if isinstance(events, list):
-            plans = [e['name'] for e in events if e.get('type') in ['Ride','Run','Swim','Workout']]
-            if plans: plan_txt = ", ".join(plans)
-
-        prompt = f"""
-        Ты тренер, нутрициолог и биохакер.
-        
-        ДАННЫЕ АТЛЕТА (Auto):
-        - Вес: {actual_weight} кг.
-        - Рост: {USER_HEIGHT} см.
-        - Возраст: {user_age} лет.
-        - Цель: Рекомпозиция.
-        - CTL: {ctl:.1f}.
-        - Здоровье: {bio_status} ({bio_text}).
-        - Погода: {weather_msg}.
-        - План: {plan_txt}.
-        
-        ОТЧЕТ ПО ПИТАНИЮ:
-        {nutri_text}
-        
-        ЗАДАЧА:
-        1. Если данных о еде нет — напомни про синхронизацию, но тренировку дай.
-        2. Если данные есть — оцени дефицит и белок.
-        3. Дай задание на тренировку.
-        
-        Ответь:
-        🥗 ПИТАНИЕ: ...
-        🚀 ТРЕНИРОВКА: ...
-        🍎 СОВЕТ: ...
-        """
-        
-        advice = get_ai_advice(prompt)
-        send_telegram(f"🤖 COACH V23.4 (SafeLines):\n\n{advice}")
-
-    except Exception as e:
-        send_telegram(f"Error: {traceback.format_exc()[-300:]}")
-
-if __name__ == "__main__":
-    run_coach()
+            status = "RED" if status == "RED" else
