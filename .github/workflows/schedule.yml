@@ -2,16 +2,16 @@ name: AI Coach Daily
 
 on:
   schedule:
-    # --- РАСПИСАНИЕ (ВРЕМЯ UTC) ---
+    # --- РАСПИСАНИЕ (ВРЕМЯ UTC для Несвижа UTC+3) ---
     
-    # 1. УТРО: 06:00 UTC = 07:00 NL / 09:00 Минск
-    - cron: '0 6 * * *'
+    # 1. УТРО: 04:00 UTC = 07:00 Несвиж
+    - cron: '0 4 * * *'
     
-    # 2. ДЕНЬ: 13:00 UTC = 14:00 NL / 16:00 Минск
-    - cron: '0 13 * * *'
+    # 2. ДЕНЬ: 11:00 UTC = 14:00 Несвиж
+    - cron: '0 11 * * *'
     
-    # 3. ВЕЧЕР: 21:00 UTC = 22:00 NL / 00:00 Минск
-    - cron: '0 21 * * *'
+    # 3. ВЕЧЕР: 19:00 UTC = 22:00 Несвиж
+    - cron: '0 19 * * *'
 
   # Кнопка для ручного запуска
   workflow_dispatch:
@@ -39,7 +39,7 @@ jobs:
           GOOGLE_KEY: ${{ secrets.GOOGLE_KEY }}
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          # Координаты берутся из секретов (если заданы) или дефолтные из кода
+          # Координаты Несвижа
           USER_LAT: ${{ secrets.USER_LAT }}
           USER_LON: ${{ secrets.USER_LON }}
         run: python main.py
