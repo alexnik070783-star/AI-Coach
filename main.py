@@ -1,50 +1,59 @@
 import requests
 import datetime
 import os
-import traceback
 import statistics
-import matplotlib.pyplot as plt
-import io
 
 # --- КЛЮЧИ ---
 INTERVALS_ID = os.environ.get("INTERVALS_ID")
 INTERVALS_API_KEY = os.environ.get("INTERVALS_KEY")
-GOOGLE_API_KEY = os.environ.get("GOOGLE_KEY")
 TG_TOKEN = os.environ.get("TG_TOKEN")
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID")
 
-# --- 🌍 НАСТРОЙКИ ---
-USER_LAT = "53.23"       
-USER_LON = "26.66"
-USER_HEIGHT = 182.0      
-USER_BIRTH_YEAR = 1983
-
 # --- 📡 ОТПРАВКА ---
-def send_telegram(text, photo_buffer=None):
+def send_telegram(text):
     if not TG_TOKEN or not TG_CHAT_ID: return
     try:
-        if photo_buffer:
-            photo_buffer.seek(0)
-            url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
-            files = {'photo': ('chart.png', photo_buffer, 'image/png')}
-            data = {'chat_id': TG_CHAT_ID, 'caption': text[:1024]}
-            requests.post(url, data=data, files=files)
-        else:
-            url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-            data = {"chat_id": TG_CHAT_ID, 'text': text}
-            requests.post(url, json=data)
+        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+        data = {"chat_id": TG_CHAT_ID, 'text': text, 'parse_mode': 'Markdown'}
+        requests.post(url, json=data)
     except Exception as e:
         print(f"TG Error: {e}")
 
-def get_ai_advice(prompt):
+# --- 🕵️‍♂️ АУДИТ (ГЛАВНАЯ ФУНКЦИЯ) ---
+def run_audit():
     try:
-        base_url = "https://generativelanguage.googleapis.com/v1beta"
-        models_url = f"{base_url}/models?key={GOOGLE_API_KEY}"
-        data = requests.get(models_url).json()
-        model = "models/gemini-1.5-flash"
-        if 'models' in data:
-            for m in data['models']:
-                if 'generateContent' in m.get('supportedGenerationMethods', []):
-                    model = m['name']; break
-        gen_url = f"{base_url}/{model}:generateContent?key={GOOGLE_API_KEY}"
-        res = requests.post(gen_url, json={"contents": [{"parts": [{"text": prompt}]
+        auth = ('API_KEY', INTERVALS_API_KEY)
+        
+        # 1. Берем данные за 90 дней (Квартал)
+        today = datetime.date.today()
+        start = (today - datetime.timedelta(days=90)).isoformat()
+        end = today.isoformat()
+        
+        base_api = f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}"
+        
+        print(f"Скачиваю архив с {start} по {end}...")
+        activities = requests.get(f"{base_api}/activities?oldest={start}&newest={end}", auth=auth).json()
+        wellness = requests.get(f"{base_api}/wellness?oldest={start}&newest={end}", auth=auth).json()
+
+        if not activities:
+            send_telegram("❌ В архиве за 90 дней пусто. Интервалс ничего не отдал.")
+            return
+
+        # --- АНАЛИЗ 1: ОБЪЕМЫ ---
+        total_time = 0
+        ride_count = 0
+        run_count = 0
+        zwift_count = 0
+        
+        for a in activities:
+            total_time += a.get('moving_time', 0)
+            atype = a.get('type')
+            
+            if atype == 'Ride': ride_count += 1
+            if atype == 'VirtualRide': 
+                ride_count += 1
+                zwift_count += 1
+            if atype == 'Run' or atype == 'Walk': run_count += 1
+        
+        # --- АНАЛИЗ 2: ВЕС ---
+        # С
