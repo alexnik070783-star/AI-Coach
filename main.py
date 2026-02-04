@@ -29,7 +29,7 @@ def send_telegram(text):
 
 def get_ai_advice(prompt):
     try:
-        # Безопасная ссылка
+        # Безопасная сборка URL
         base_url = "https://generativelanguage.googleapis.com/v1beta"
         
         # 1. Модель
@@ -81,7 +81,7 @@ def get_athlete_profile(auth):
     except Exception:
         return 35
 
-# --- 🥗 ПИТАНИЕ (ТОЛЬКО КАЛОРИИ) ---
+# --- 🥗 ПИТАНИЕ (КАЛОРИИ) ---
 def analyze_nutrition(wellness_data, age):
     # 1. Вес
     current_weight = 78.0 
@@ -91,7 +91,7 @@ def analyze_nutrition(wellness_data, age):
             current_weight = float(w)
             break
 
-    # 2. BMR (Базовый обмен + Бытовая активность)
+    # 2. BMR
     bmr = (10 * current_weight) + (6.25 * USER_HEIGHT) - (5 * age) + 5
     daily_norm = bmr * 1.2 
     
@@ -110,8 +110,6 @@ def analyze_nutrition(wellness_data, age):
         return f"⚠️ Вес {current_weight}кг. Данные о еде не найдены (0 ккал).", 0, current_weight
 
     eaten = last_day_with_food.get('kcalConsumed') or 0
-    # БЖУ игнорируем, так как их нет
-    
     balance = eaten - daily_norm
     
     report = f"""
@@ -135,6 +133,7 @@ def analyze_neuro(wellness_data):
     status = "GREEN"
     details = []
     
+    # 1. HRV
     if today_hrv and len(hrv_list) > 3:
         avg = statistics.mean(hrv_list[:-1])
         diff = ((today_hrv - avg)/avg)*100
@@ -144,7 +143,88 @@ def analyze_neuro(wellness_data):
         else:
             details.append(f"HRV норм")
             
+    # 2. Сон
     if sleep_list:
         last_sleep = sleep_list[-1] / 3600
         if last_sleep < 6:
-            status = "RED" if status == "RED" else
+            # Исправленная логика без однострочников
+            if status != "RED":
+                status = "YELLOW"
+            details.append(f"Сон {last_sleep:.1f}ч (Мало)")
+        else:
+            details.append(f"Сон {last_sleep:.1f}ч")
+            
+    return ", ".join(details), status
+
+# --- ЗАПУСК ---
+def run_coach():
+    try:
+        auth = ('API_KEY', INTERVALS_API_KEY)
+        today = datetime.date.today()
+        start = (today - datetime.timedelta(days=7)).isoformat()
+        end = today.isoformat()
+        
+        # Ссылки
+        base_api = f"https://intervals.icu/api/v1/athlete/{INTERVALS_ID}"
+        w_url = f"{base_api}/wellness?oldest={start}&newest={end}"
+        wellness = requests.get(w_url, auth=auth).json()
+        
+        e_url = f"{base_api}/events?oldest={end}&newest={end}"
+        events = requests.get(e_url, auth=auth).json()
+        
+        weather_msg = get_weather()
+        user_age = get_athlete_profile(auth)
+        
+        ctl = 0.0
+        if isinstance(wellness, list):
+            for day in reversed(wellness):
+                if day.get('ctl') is not None:
+                    ctl = float(day.get('ctl'))
+                    break
+        
+        nutri_text, balance, actual_weight = analyze_nutrition(wellness, user_age)
+        bio_text, bio_status = analyze_neuro(wellness)
+
+        plan_txt = "Отдых"
+        if isinstance(events, list):
+            plans = [e['name'] for e in events if e.get('type') in ['Ride','Run','Swim','Workout']]
+            if plans: plan_txt = ", ".join(plans)
+
+        prompt = f"""
+        Ты тренер, нутрициолог и биохакер.
+        
+        ДАННЫЕ АТЛЕТА:
+        - Вес: {actual_weight} кг.
+        - Возраст: {user_age} лет.
+        - Цель: Рекомпозиция (Сжигание жира).
+        - CTL: {ctl:.1f}.
+        - Здоровье: {bio_status} ({bio_text}).
+        - Погода: {weather_msg}.
+        - План: {plan_txt}.
+        
+        ОТЧЕТ ПО ПИТАНИЮ (Только Калории):
+        {nutri_text}
+        
+        ЗАДАЧА:
+        1. АНАЛИЗ КАЛОРИЙ:
+           - Оцени Дефицит/Профицит.
+           - Если Дефицит > 800 ккал -> "Опасно голодно!".
+           - Если Дефицит 300-500 ккал -> "Хороший темп".
+           
+        2. ТРЕНИРОВКА:
+           - Дай задание, учитывая погоду и здоровье.
+        
+        Ответь:
+        🥗 БАЛАНС: ...
+        🚀 ТРЕНИРОВКА: ...
+        🍎 СОВЕТ: ...
+        """
+        
+        advice = get_ai_advice(prompt)
+        send_telegram(f"📉 COACH V24.1 (FIX):\n\n{advice}")
+
+    except Exception as e:
+        send_telegram(f"Error: {traceback.format_exc()[-300:]}")
+
+if __name__ == "__main__":
+    run_coach()
