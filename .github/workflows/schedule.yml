@@ -2,37 +2,47 @@ name: AI Coach Daily
 
 on:
   schedule:
-    # 04:00 UTC = 07:00 Несвиж
-    - cron: '0 4 * * *'
-    # 11:00 UTC = 14:00 Несвиж
-    - cron: '0 11 * * *'
-    # 19:00 UTC = 22:00 Несвиж
-    - cron: '0 19 * * *'
-  workflow_dispatch:
+    # Время указано в UTC.
+    # Беларусь/Москва = UTC+3.
+    # GitHub может задерживать запуск на 20-40 мин, поэтому ставим с запасом.
+
+    # УТРО: Хотим 07:00 (+3) -> Ставим 03:30 UTC
+    # (Придет в районе 06:40 - 07:20 по твоему времени)
+    - cron: '30 3 * * *'
+
+    # ОБЕД: Хотим 14:00 (+3) -> Ставим 10:30 UTC
+    # (Придет в районе 13:40 - 14:20)
+    - cron: '30 10 * * *'
+
+    # ВЕЧЕР: Хотим 22:00 (+3) -> Ставим 18:30 UTC
+    # (Придет в районе 21:40 - 22:20)
+    - cron: '30 18 * * *'
+
+  workflow_dispatch: # Кнопка для ручного запуска
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    
+    env:
+      INTERVALS_ID: ${{ secrets.INTERVALS_ID }}
+      INTERVALS_KEY: ${{ secrets.INTERVALS_KEY }}
+      GOOGLE_KEY: ${{ secrets.GOOGLE_KEY }}
+      TG_TOKEN: ${{ secrets.TG_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
-      # ДОБАВИЛИ matplotlib и numpy
       - name: Install dependencies
-        run: pip install requests matplotlib numpy
+        run: |
+          pip install requests matplotlib
 
       - name: Run Coach
-        env:
-          INTERVALS_ID: ${{ secrets.INTERVALS_ID }}
-          INTERVALS_KEY: ${{ secrets.INTERVALS_KEY }}
-          GOOGLE_KEY: ${{ secrets.GOOGLE_KEY }}
-          TG_TOKEN: ${{ secrets.TG_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          USER_LAT: ${{ secrets.USER_LAT }}
-          USER_LON: ${{ secrets.USER_LON }}
         run: python main.py
