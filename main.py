@@ -5,6 +5,7 @@ import traceback
 import statistics
 import matplotlib.pyplot as plt
 import io
+import time
 
 # --- КЛЮЧИ ---
 INTERVALS_ID = os.environ.get("INTERVALS_ID")
@@ -19,29 +20,38 @@ USER_LON = "26.66"
 USER_HEIGHT = 182.0      
 USER_BIRTH_YEAR = 1983
 
-# --- 📡 ОТПРАВКА (С ЛОГАМИ) ---
+# --- 📡 ОТПРАВКА (РАЗДЕЛЬНАЯ) ---
 def send_telegram(text, photo_buffer=None):
-    print(f"📤 Пытаюсь отправить в Telegram: {text[:50]}...")
     if not TG_TOKEN or not TG_CHAT_ID: 
-        print("❌ ОШИБКА: Нет TG_TOKEN или TG_CHAT_ID в Secrets!")
+        print("❌ ОШИБКА: Нет токенов Telegram!")
         return
+
     try:
+        # 1. Если есть график — шлем его первым (без текста или с заголовком)
         if photo_buffer:
+            print("📤 Отправляю график...")
             photo_buffer.seek(0)
-            url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
+            url_photo = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
             files = {'photo': ('chart.png', photo_buffer, 'image/png')}
-            data = {'chat_id': TG_CHAT_ID, 'caption': text[:1024]}
-            res = requests.post(url, data=data, files=files)
-        else:
-            url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-            data = {"chat_id": TG_CHAT_ID, 'text': text}
-            res = requests.post(url, json=data)
+            data = {'chat_id': TG_CHAT_ID}
+            requests.post(url_photo, data=data, files=files)
+            time.sleep(1) # Даем секунду передышки
+
+        # 2. Текст шлем ВСЕГДА отдельным сообщением (лимит 4096, а не 1024)
+        print(f"📤 Отправляю текст ({len(text)} симв)...")
+        url_msg = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
         
-        if res.status_code != 200:
-            print(f"❌ Telegram API Error: {res.text}")
+        # Если текст огромный, режем его (на всякий случай)
+        if len(text) > 4000:
+            parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
+            for part in parts:
+                requests.post(url_msg, json={"chat_id": TG_CHAT_ID, 'text': part})
+                time.sleep(1)
         else:
-            print("✅ Сообщение отправлено успешно.")
+            requests.post(url_msg, json={"chat_id": TG_CHAT_ID, 'text': text})
             
+        print("✅ Всё отправлено.")
+
     except Exception as e:
         print(f"❌ Ошибка отправки TG: {e}")
 
@@ -168,7 +178,7 @@ def check_safety_triggers(wellness_data):
 # --- 🌅 УТРО ---
 def run_morning(auth, wellness, weather):
     if not wellness:
-        send_telegram("🌅 Утро: Данных wellness нет (пустой список). Проверь синхронизацию.")
+        send_telegram("🌅 Утро: Данных wellness нет.")
         return
 
     last_day = wellness[-1]
@@ -204,7 +214,7 @@ def run_lunch(auth, wellness):
 # --- 🌙 ВЕЧЕР ---
 def run_evening(auth, wellness, events, weather):
     if not wellness:
-        send_telegram("🌙 Вечер: Нет данных wellness для отчета.")
+        send_telegram("🌙 Вечер: Нет данных wellness.")
         return
 
     today_iso = datetime.date.today().isoformat()
@@ -259,7 +269,7 @@ def run_evening(auth, wellness, events, weather):
 
 # --- ЗАПУСК ---
 def run_coach():
-    print("🚀 Start Coach V38.0...")
+    print("🚀 Start Coach V39.0...")
     try:
         if not TG_TOKEN:
             print("❌ ОШИБКА: TG_TOKEN не найден!")
@@ -273,13 +283,10 @@ def run_coach():
         print(f"🕒 Время UTC: {h}")
         
         if 0 <= h < 6: 
-            print("Режим: УТРО")
             run_morning(auth, wellness, weather)
         elif 6 <= h < 15: 
-            print("Режим: ОБЕД")
             run_lunch(auth, wellness)
         else: 
-            print("Режим: ВЕЧЕР")
             run_evening(auth, wellness, events, weather)
             
     except Exception as e:
